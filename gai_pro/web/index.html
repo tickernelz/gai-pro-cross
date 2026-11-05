@@ -22,9 +22,9 @@
       <li><strong>Run.</strong> Press <em>Execute</em> on one row, or <em>Run batch</em> to queue every account. <em>Stop all</em> halts the queue without deleting rows.</li>
       <li><strong>Read the result.</strong> Status moves queued → running → done or error. On a finished row press <em>proof</em> for the screenshot, and read the Log panel to see what each step did.</li>
     </ol>
-    <p class="hint">The step counter <code>1/5 … 5/5</code> means: 1 login, 2 two-factor or recovery verification, 3 bind card, 4 stack the trial layers, 5 cancel the renewal.</p>
+    <p class="hint">The step counter <code>1/5 … 5/5</code> means: 1 sign in and clear two-factor or recovery, 2–4 subscribe one offer layer each (a layer that is already stacked is skipped), 5 cancel auto-renew and capture the proof screenshot.</p>
     <p class="hint legend">Status: <span class="status-queued">queued</span> waiting · <span class="status-running">running</span> in progress · <span class="status-done">done</span> finished · <span class="status-error">error</span> needs the Log</p>
-    <p class="hint">Nothing you type here leaves this machine: the console listens on loopback and there is no telemetry.</p>
+    <p class="hint">The console listens on loopback only and there is no telemetry. In <code>live</code> mode the checkout profile is submitted to Google's own checkout page; nothing else leaves this machine.</p>
   </section>
   <section class="panel" id="configPanel">
     <h2>Global config and checkout profile</h2>

@@ -138,8 +138,12 @@ $("btnImport").addEventListener("click", async () => {
 });
 
 $("btnBatchRun").addEventListener("click", async () => {
-  await post("/api/run/batch", { start_step: 1 });
-  flash("batch queued — watch Status and the Log below");
+  const result = await post("/api/run/batch", { start_step: 1 });
+  if (result.queued) {
+    flash(`${result.queued} account(s) queued — watch Status below`);
+  } else {
+    flash("nothing to queue: import accounts, or reset finished rows first", true);
+  }
   lastLogLength = -1;
   refresh();
 });
