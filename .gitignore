@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+artifacts/
+profiles/
+screenshots/
+*.log
+config.json
+accounts.json
+evidence-linux/

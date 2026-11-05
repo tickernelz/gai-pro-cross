@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Google AI Pro trial console (cross-platform)</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Google AI Pro trial console</h1>
+  <p class="warn">Sandbox by default. Local loopback only. Reads and writes stay on this machine.</p>
+  <div id="summaryStats" class="stats"></div>
+</header>
+<main>
+  <section class="panel" id="configPanel">
+    <h2>Global config and checkout profile</h2>
+    <label>Mode
+      <select id="cfgMode">
+        <option value="mock">mock (local sandbox Google)</option>
+        <option value="live">live (real Google, unverified)</option>
+      </select>
+    </label>
+    <label>Target region <input id="cfgTargetRegion" value="US"></label>
+    <label>Target plan <input id="cfgTargetPlan" value="pro_2year_zero"></label>
+    <label class="row"><input type="checkbox" id="cfgAutoCancel" checked> Cancel auto-renew at the end</label>
+    <label class="row"><input type="checkbox" id="cfgHeadless" checked> Headless browser in live mode</label>
+    <label>Proxy template <input id="cfgProxyTemplate" placeholder="http://user:pass@host:port"></label>
+    <fieldset>
+      <legend>Card</legend>
+      <label>Number <input id="cfgCardNumber" inputmode="numeric" autocomplete="off"></label>
+      <label>Exp month <input id="cfgExpMonth" size="4" autocomplete="off"></label>
+      <label>Exp year <input id="cfgExpYear" size="6" autocomplete="off"></label>
+      <label>CVC <input id="cfgCvc" size="4" autocomplete="off"></label>
+      <label>Holder <input id="cfgHolder" autocomplete="off"></label>
+    </fieldset>
+    <fieldset>
+      <legend>Billing address (tax region)</legend>
+      <label>Street <input id="cfgAddr"></label>
+      <label>City <input id="cfgCity"></label>
+      <label>State <input id="cfgProvince" size="4"></label>
+      <label>ZIP <input id="cfgZip" size="8"></label>
+    </fieldset>
+    <div class="buttons">
+      <button id="btnSaveConfig">Save config</button>
+      <button id="btnTestProxy">Test proxy</button>
+    </div>
+    <p id="proxyTestResult" class="muted"></p>
+  </section>
+  <section class="panel" id="accountsPanel">
+    <h2>Batch account import</h2>
+    <textarea id="importText" rows="6" placeholder="email----password----recovery----2fa&#10;email----password----2fa&#10;email----password"></textarea>
+    <div class="buttons">
+      <button id="btnImport">Import accounts</button>
+      <button id="btnBatchRun">Run batch</button>
+      <button id="btnStop">Stop all</button>
+    </div>
+    <table>
+      <thead><tr><th>Account</th><th>Status</th><th>Step</th><th>Expiry</th><th>2FA</th><th></th></tr></thead>
+      <tbody id="accountsTbody"></tbody>
+    </table>
+  </section>
+</main>
+<section class="panel logs">
+  <h2>Log</h2>
+  <pre id="logTerminal"></pre>
+</section>
+<div id="modalImg" class="modal" hidden>
+  <div class="modal-body">
+    <button id="modalClose">close</button>
+    <h3 id="modalTitle"></h3>
+    <img id="imgModal" alt="proof">
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

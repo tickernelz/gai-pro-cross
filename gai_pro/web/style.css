@@ -1,0 +1,30 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.45 system-ui, sans-serif; background: #101214; color: #e8eaed; }
+header { padding: 16px 20px; border-bottom: 1px solid #2a2d31; }
+h1 { margin: 0 0 4px; font-size: 20px; }
+h2 { font-size: 15px; margin: 0 0 12px; text-transform: uppercase; letter-spacing: .06em; color: #9aa0a6; }
+.warn { margin: 0; color: #f9ab00; }
+.stats { margin-top: 8px; color: #9aa0a6; }
+main { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; gap: 16px; padding: 16px; }
+.panel { background: #17191c; border: 1px solid #2a2d31; border-radius: 10px; padding: 16px; }
+label { display: block; margin-bottom: 10px; }
+label.row { display: flex; align-items: center; gap: 8px; }
+input, select, textarea { width: 100%; padding: 7px 9px; margin-top: 4px; background: #0e1012; color: #e8eaed; border: 1px solid #33373d; border-radius: 6px; }
+input[type=checkbox] { width: auto; }
+fieldset { border: 1px solid #2a2d31; border-radius: 8px; margin: 0 0 12px; padding: 10px 12px; }
+legend { color: #9aa0a6; font-size: 12px; text-transform: uppercase; }
+.buttons { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+button { padding: 7px 12px; background: #1a73e8; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
+button:disabled { background: #3c4043; color: #9aa0a6; cursor: default; }
+table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #26292e; vertical-align: top; }
+.status-done { color: #34a853; }
+.status-error { color: #ea4335; }
+.status-running { color: #f9ab00; }
+.logs { margin: 0 16px 16px; }
+pre#logTerminal { max-height: 240px; overflow: auto; margin: 0; font: 12px/1.5 ui-monospace, monospace; white-space: pre-wrap; }
+.muted { color: #9aa0a6; }
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: grid; place-items: center; z-index: 20; }
+.modal-body { background: #17191c; padding: 16px; border-radius: 10px; max-width: 92vw; max-height: 92vh; overflow: auto; }
+.modal-body img { max-width: 100%; display: block; margin-top: 8px; border: 1px solid #2a2d31; }
