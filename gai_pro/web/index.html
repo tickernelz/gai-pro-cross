@@ -13,50 +13,68 @@
   <div id="summaryStats" class="stats"></div>
 </header>
 <main>
+  <section class="panel guide" id="guidePanel">
+    <h2>How to use — 5 steps</h2>
+    <ol class="steps">
+      <li><strong>Pick a mode.</strong> <code>mock</code> drives a fake Google that runs on this machine: nothing real happens and no card is ever charged. <code>live</code> drives the real Google site with your own account and card; it is unverified and it breaks Google's terms, so use it at your own risk.</li>
+      <li><strong>Fill the checkout profile</strong> — card and billing address. Only <code>live</code> uses it. It is written to this machine's config file with owner-only permissions and the card number comes back masked.</li>
+      <li><strong>Paste accounts</strong> in the right panel, one per line, then press <em>Import accounts</em>. Accepted forms: <code>email----password----recovery----2fa</code>, <code>email----password----2fa</code>, <code>email----password</code>.</li>
+      <li><strong>Run.</strong> Press <em>Execute</em> on one row, or <em>Run batch</em> to queue every account. <em>Stop all</em> halts the queue without deleting rows.</li>
+      <li><strong>Read the result.</strong> Status moves queued → running → done or error. On a finished row press <em>proof</em> for the screenshot, and read the Log panel to see what each step did.</li>
+    </ol>
+    <p class="hint">The step counter <code>1/5 … 5/5</code> means: 1 login, 2 two-factor or recovery verification, 3 bind card, 4 stack the trial layers, 5 cancel the renewal.</p>
+    <p class="hint legend">Status: <span class="status-queued">queued</span> waiting · <span class="status-running">running</span> in progress · <span class="status-done">done</span> finished · <span class="status-error">error</span> needs the Log</p>
+    <p class="hint">Nothing you type here leaves this machine: the console listens on loopback and there is no telemetry.</p>
+  </section>
   <section class="panel" id="configPanel">
     <h2>Global config and checkout profile</h2>
     <label>Mode
       <select id="cfgMode">
-        <option value="mock">mock (local sandbox Google)</option>
-        <option value="live">live (real Google, unverified)</option>
+        <option value="mock">mock — fake local Google, safe dry run</option>
+        <option value="live">live — real Google, unverified, own risk</option>
       </select>
     </label>
+    <p class="hint">Start with <code>mock</code> to learn the flow. Switch to <code>live</code> only with an account and card you accept to lose.</p>
     <label>Target region <input id="cfgTargetRegion" value="US"></label>
     <label>Target plan <input id="cfgTargetPlan" value="pro_2year_zero"></label>
     <label class="row"><input type="checkbox" id="cfgAutoCancel" checked> Cancel auto-renew at the end</label>
     <label class="row"><input type="checkbox" id="cfgHeadless" checked> Headless browser in live mode</label>
     <label>Proxy template <input id="cfgProxyTemplate" placeholder="http://user:pass@host:port"></label>
+    <p class="hint">Optional. Leave empty to use this machine's direct connection; press <em>Test proxy</em> to check it before a run.</p>
     <fieldset>
-      <legend>Card</legend>
-      <label>Number <input id="cfgCardNumber" inputmode="numeric" autocomplete="off"></label>
-      <label>Exp month <input id="cfgExpMonth" size="4" autocomplete="off"></label>
-      <label>Exp year <input id="cfgExpYear" size="6" autocomplete="off"></label>
-      <label>CVC <input id="cfgCvc" size="4" autocomplete="off"></label>
-      <label>Holder <input id="cfgHolder" autocomplete="off"></label>
+      <legend>Card — live mode only</legend>
+      <p class="hint">In <code>mock</code> mode these fields are ignored: the console uses the built-in sandbox card 4242 4242 4242 4242. Fill them only for <code>live</code>.</p>
+      <label>Number <input id="cfgCardNumber" inputmode="numeric" autocomplete="off" placeholder="16 digits, stored locally"></label>
+      <label>Exp month <input id="cfgExpMonth" size="4" autocomplete="off" placeholder="08"></label>
+      <label>Exp year <input id="cfgExpYear" size="6" autocomplete="off" placeholder="29"></label>
+      <label>CVC <input id="cfgCvc" size="4" autocomplete="off" placeholder="never saved"></label>
+      <label>Holder <input id="cfgHolder" autocomplete="off" placeholder="NAME ON CARD"></label>
     </fieldset>
     <fieldset>
       <legend>Billing address (tax region)</legend>
-      <label>Street <input id="cfgAddr"></label>
-      <label>City <input id="cfgCity"></label>
-      <label>State <input id="cfgProvince" size="4"></label>
-      <label>ZIP <input id="cfgZip" size="8"></label>
+      <label>Street <input id="cfgAddr" placeholder="700 SW 5th Ave"></label>
+      <label>City <input id="cfgCity" placeholder="Portland"></label>
+      <label>State <input id="cfgProvince" size="4" placeholder="OR"></label>
+      <label>ZIP <input id="cfgZip" size="8" placeholder="97201"></label>
     </fieldset>
     <div class="buttons">
       <button id="btnSaveConfig">Save config</button>
-      <button id="btnTestProxy">Test proxy</button>
+      <button id="btnTestProxy" class="secondary">Test proxy</button>
     </div>
+    <p id="statusLine" class="flash"></p>
     <p id="proxyTestResult" class="muted"></p>
   </section>
   <section class="panel" id="accountsPanel">
     <h2>Batch account import</h2>
     <textarea id="importText" rows="6" placeholder="email----password----recovery----2fa&#10;email----password----2fa&#10;email----password"></textarea>
+    <p class="hint">One account per line. Lines that do not match a form above are rejected and reported under the buttons.</p>
     <div class="buttons">
       <button id="btnImport">Import accounts</button>
       <button id="btnBatchRun">Run batch</button>
-      <button id="btnStop">Stop all</button>
+      <button id="btnStop" class="secondary">Stop all</button>
     </div>
     <table>
-      <thead><tr><th>Account</th><th>Status</th><th>Step</th><th>Expiry</th><th>2FA</th><th></th></tr></thead>
+      <thead><tr><th>Account</th><th>Status</th><th>Step</th><th>Expiry</th><th>2FA</th><th>Actions</th></tr></thead>
       <tbody id="accountsTbody"></tbody>
     </table>
   </section>
@@ -67,9 +85,11 @@
 </section>
 <div id="modalImg" class="modal" hidden>
   <div class="modal-body">
-    <button id="modalClose">close</button>
+    <div class="buttons">
+      <button id="modalClose" class="secondary">close</button>
+    </div>
     <h3 id="modalTitle"></h3>
-    <img id="imgModal" alt="proof">
+    <img id="imgModal" alt="proof screenshot">
   </div>
 </div>
 <script src="/static/app.js"></script>

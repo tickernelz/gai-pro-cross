@@ -162,7 +162,17 @@ class Store:
         out = dict(acc)
         out.pop("password", None)
         out.pop("totp_secret", None)
+        out.pop("last_screenshot", None)
         out["email_masked"] = mask_email(acc.get("email", ""))
         out["has_totp"] = bool(acc.get("totp_secret"))
         out["has_recovery"] = bool(acc.get("recovery_email"))
+        out["proof_rel"] = self._proof_rel(acc.get("last_screenshot"))
         return out
+
+    def _proof_rel(self, path: str | None) -> str:
+        if not path:
+            return ""
+        try:
+            return Path(path).resolve().relative_to(self.layout.screenshots.resolve()).as_posix()
+        except (ValueError, OSError):
+            return ""
