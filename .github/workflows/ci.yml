@@ -30,7 +30,7 @@ jobs:
         run: python -m gai_pro selftest --data-dir artifacts/data
         shell: bash
       - name: Per-OS path probe
-        run: python -m gai_pro probe --data-dir artifacts/data
+        run: python -m gai_pro probe --data-dir artifacts/data | tee artifacts/data/probe.txt
         shell: bash
       - name: Upload proof artifacts
         uses: actions/upload-artifact@v4
@@ -39,4 +39,5 @@ jobs:
           path: |
             artifacts/data/screenshots/**/*.png
             artifacts/data/console.log
+            artifacts/data/probe.txt
           if-no-files-found: warn
