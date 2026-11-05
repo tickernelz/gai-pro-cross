@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .card import SANDBOX_CARD
 from .gateway import GatewayError, ZeroCostViolation
 
 
@@ -23,6 +24,8 @@ def run_pipeline(account, config, gateway, store, stop_event=None, attempts=2):
     """Run every step for one account and return the final account state."""
     offers = config.get("offers", [])
     card = config.get("card", {})
+    if config.get("mode") == "mock" and not str(card.get("number") or "").strip():
+        card = dict(SANDBOX_CARD)
     address = config.get("address", {})
     max_months = int(config.get("max_stack_months", 24))
 

@@ -37,6 +37,35 @@ The mock mode is the only path this repository verifies in CI. The live selector
 profile is ported from the original repository and is **not verified here**; run it
 against your own account with a visible browser and a card you own, at your own risk.
 
+## How to use — 5 steps
+
+The console shows this same guide at the top of the page. Read it before the first run.
+
+1. **Pick a mode.** `mock` drives a fake Google that runs on this machine: nothing
+   real happens and no card is ever charged. `live` drives the real Google site with
+   your own account and card; it is unverified and it breaks Google's terms, so use it
+   at your own risk. **Start with `mock`** — it needs nothing but Python and it is the
+   only mode CI verifies.
+2. **Fill the checkout profile** — card and billing address. Only `live` uses it. It
+   is written to this machine's config file with owner-only permissions and the card
+   number comes back masked.
+3. **Paste accounts** in the right panel, one per line, then press *Import accounts*.
+   Accepted forms: `email----password----recovery----2fa`,
+   `email----password----2fa`, `email----password`.
+4. **Run.** Press *Execute* on one row, or *Run batch* to queue every account.
+   *Stop all* halts the queue without deleting rows.
+5. **Read the result.** Status moves queued → running → done or error. On a finished
+   row press *proof* for the screenshot, and read the Log panel to see what each step
+   did.
+
+The step counter `1/5 … 5/5` means: 1 sign in and clear two-factor or recovery,
+2–4 subscribe one offer layer each (a layer that is already stacked is skipped),
+5 cancel auto-renew and capture the proof screenshot.
+
+The console listens on loopback only and there is no telemetry. In `live` mode the
+checkout profile is submitted to Google's own checkout page; nothing else leaves this
+machine.
+
 ## Install
 
 Python 3.10 or newer. No runtime dependencies for mock mode.

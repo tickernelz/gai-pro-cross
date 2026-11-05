@@ -3,6 +3,12 @@ const post = (url, body) => fetch(url, { method: "POST", headers: { "content-typ
 
 let lastLogLength = 0;
 
+function flash(message, isError) {
+  const line = $("statusLine");
+  line.textContent = message;
+  line.className = isError ? "flash error" : "flash";
+}
+
 function renderStats(state) {
   const done = state.accounts.filter((a) => a.status === "done").length;
   const running = state.accounts.filter((a) => a.is_running).length;
@@ -31,19 +37,27 @@ function renderConfig(state) {
 function renderAccounts(state) {
   const tbody = $("accountsTbody");
   tbody.innerHTML = "";
+  if (!state.accounts.length) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = '<td colspan="6" class="empty">No accounts yet. Paste accounts in the box above, press Import accounts, then Execute or Run batch.</td>';
+    tbody.appendChild(tr);
+    return;
+  }
   for (const acc of state.accounts) {
     const tr = document.createElement("tr");
-    const shot = acc.last_screenshot ? `<button data-shot="${acc.id}">proof</button>` : "";
+    const shot = acc.proof_rel ? `<button data-shot="${acc.id}" class="secondary">proof</button>` : "";
     tr.innerHTML = `<td title="${acc.email_masked}">${acc.email_masked}${acc.proxy ? " (proxy)" : ""}</td>
       <td class="status-${acc.status}">${acc.status}</td>
       <td>${acc.current_step}/5 ${acc.step_message || ""}</td>
       <td>${acc.expiry_date || "-"}</td>
       <td>${acc.has_totp ? acc.totp_now + " (" + acc.totp_rem + "s)" : "no totp"}</td>
       <td>
-        <button data-run="${acc.id}" ${acc.is_running ? "disabled" : ""}>Execute</button>
-        <button data-reset="${acc.id}">Reset</button>
-        <button data-delete="${acc.id}">Delete</button>
-        ${shot}
+        <div class="buttons">
+          <button data-run="${acc.id}" ${acc.is_running ? "disabled" : ""}>Execute</button>
+          <button data-reset="${acc.id}" class="secondary">Reset</button>
+          <button data-delete="${acc.id}" class="secondary">Delete</button>
+          ${shot}
+        </div>
       </td>`;
     tbody.appendChild(tr);
   }
@@ -69,6 +83,10 @@ async function refresh() {
   }
 }
 
+function toggleModal(open) {
+  $("modalImg").hidden = !open;
+}
+
 $("btnSaveConfig").addEventListener("click", async () => {
   const card = {
     exp_month: $("cfgExpMonth").value,
@@ -78,7 +96,7 @@ $("btnSaveConfig").addEventListener("click", async () => {
   };
   const typed = $("cfgCardNumber").value.replace(/\D/g, "");
   if (typed.length >= 13) card.number = typed;
-  await post("/api/config", {
+  const result = await post("/api/config", {
     mode: $("cfgMode").value,
     target_region: $("cfgTargetRegion").value,
     target_plan: $("cfgTargetPlan").value,
@@ -91,10 +109,10 @@ $("btnSaveConfig").addEventListener("click", async () => {
       locality: $("cfgCity").value,
       province: $("cfgProvince").value,
       postal_code: $("cfgZip").value,
-      country: "US",
     },
   });
   $("cfgCvc").value = "";
+  flash(result.error ? "config rejected: " + result.error : "config saved in mode " + $("cfgMode").value, !!result.error);
   lastLogLength = -1;
   refresh();
 });
@@ -109,19 +127,30 @@ $("btnImport").addEventListener("click", async () => {
   $("importText").value = "";
   lastLogLength = -1;
   refresh();
-  if (result.rejected && result.rejected.length) {
-    $("proxyTestResult").textContent = result.rejected.length + " line(s) rejected";
+  const rejected = (result.rejected || []).length;
+  if (!result.added && !rejected) {
+    flash("nothing imported: the box was empty", true);
+  } else if (rejected) {
+    flash(`${result.added} account(s) imported, ${rejected} line(s) rejected: ${result.rejected.join(", ")}`, true);
+  } else {
+    flash(`${result.added} account(s) imported — press Execute or Run batch`);
   }
 });
 
 $("btnBatchRun").addEventListener("click", async () => {
-  await post("/api/run/batch", { start_step: 1 });
+  const result = await post("/api/run/batch", { start_step: 1 });
+  if (result.queued) {
+    flash(`${result.queued} account(s) queued — watch Status below`);
+  } else {
+    flash("nothing to queue: import accounts, or reset finished rows first", true);
+  }
   lastLogLength = -1;
   refresh();
 });
 
 $("btnStop").addEventListener("click", async () => {
   await post("/api/stop", {});
+  flash("stop requested");
   refresh();
 });
 
@@ -133,17 +162,23 @@ $("accountsTbody").addEventListener("click", async (event) => {
   if (target.dataset.shot) {
     const state = await fetch("/api/state").then((r) => r.json());
     const acc = state.accounts.find((a) => a.id === target.dataset.shot);
-    if (acc && acc.last_screenshot) {
-      $("modalTitle").textContent = acc.email_masked;
-      $("imgModal").src = "/screenshots/" + acc.id + "/final-proof.png?" + Date.now();
-      $("modalImg").hidden = false;
+    if (acc && acc.proof_rel) {
+      $("modalTitle").textContent = acc.email_masked + " — final proof";
+      $("imgModal").src = "/screenshots/" + encodeURI(acc.proof_rel) + "?" + Date.now();
+      toggleModal(true);
     }
   }
   lastLogLength = -1;
   refresh();
 });
 
-$("modalClose").addEventListener("click", () => { $("modalImg").hidden = true; });
+$("modalClose").addEventListener("click", () => toggleModal(false));
+$("modalImg").addEventListener("click", (event) => {
+  if (event.target === $("modalImg")) toggleModal(false);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !$("modalImg").hidden) toggleModal(false);
+});
 
 refresh();
 setInterval(refresh, 2000);

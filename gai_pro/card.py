@@ -17,6 +17,14 @@ TAXFREE_PROFILES = {
 
 NO_SALES_TAX_STATES = {"OR", "MT", "NH", "DE", "AK"}
 
+SANDBOX_CARD = {
+    "number": "4242424242424242",
+    "exp_month": "12",
+    "exp_year": "2030",
+    "cvc": "123",
+    "holder": "SANDBOX",
+}
+
 
 class CardError(ValueError):
     pass
