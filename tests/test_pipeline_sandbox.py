@@ -91,6 +91,25 @@ def test_zero_cost_guard_blocks_a_paid_checkout(store, layout, sandbox):
     assert "0.00" in result["last_error"]
 
 
+def test_mock_without_card_uses_the_sandbox_card(store, layout, sandbox):
+    acc = account()
+    store.replace_accounts([acc])
+    store.update_config({
+        "mode": "mock",
+        "card": {"number": "", "exp_month": "", "exp_year": "", "cvc": "", "holder": ""},
+        "address": dict(TAXFREE_PROFILES["US-OR-97201"]),
+        "auto_cancel": True,
+    })
+    gateway = gateway_for(store, layout, sandbox, acc)
+    result = run_pipeline(acc, store.config, gateway, store, threading.Event())
+
+    assert result["status"] == "done", result
+    assert result["current_step"] == 5
+    assert result["layers_done"] == 3
+    assert result["expiry_date"] > "2028-01-01"
+    assert result["last_screenshot"].endswith("final-proof.png")
+
+
 def test_stop_event_marks_account_stopped(store, layout, sandbox):
     acc = account()
     store.replace_accounts([acc])

@@ -87,6 +87,37 @@ def test_proxy_test_rejects_malformed_value(console):
     assert post(console.url, "/api/proxy/test", {"proxy": "not-a-proxy"})["ok"] is False
 
 
+def wait_for_finished(base, timeout=30):
+    deadline = time.time() + timeout
+    state = None
+    while time.time() < deadline:
+        state = get(base, "/api/state")
+        if state["accounts"] and state["accounts"][0]["status"] in ("done", "error"):
+            return state
+        time.sleep(0.2)
+    return state
+
+
+def test_state_exposes_relative_proof_and_no_absolute_path(console, layout):
+    base = console.url
+    post(base, "/api/accounts/import", {"raw_text": "proof@example.com----pw----rec@example.com----JBSWY3DPEHPK3PXP"})
+    post(base, "/api/config", {"mode": "mock"})
+    assert post(base, "/api/run/batch", {})["queued"] == 1
+
+    state = wait_for_finished(base)
+    account = state["accounts"][0]
+    assert account["status"] == "done", account
+    assert account["current_step"] == 5
+    assert "last_screenshot" not in account
+    assert account["proof_rel"].endswith("/final-proof.png")
+    assert str(layout.screenshots) not in json.dumps(state["accounts"])
+
+    proof_url = base + "/screenshots/" + urllib.parse.quote(account["proof_rel"])
+    with urllib.request.urlopen(proof_url, timeout=10) as response:
+        assert response.status == 200
+        assert response.read(8) == b"\x89PNG\r\n\x1a\n"
+
+
 def test_config_round_trip_masks_stored_card(console):
     base = console.url
     post(base, "/api/config", {"mode": "mock", "card": {"number": "4242424242424242", "exp_month": "08", "exp_year": "29", "cvc": "123", "holder": "SANDBOX"}})
