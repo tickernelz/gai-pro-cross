@@ -43,6 +43,10 @@ def test_console_is_clickable_and_proof_overlay_opens_only_on_demand(console, pa
     page.click("#btnImport")
     page.wait_for_function("() => document.getElementById('statusLine').textContent.includes('1 account(s) imported')")
 
+    page.click("#accountsTbody button[data-login]")
+    page.wait_for_function("() => document.querySelector('#accountsTbody .status-done') !== null", timeout=20000)
+    page.wait_for_function("() => document.querySelector('#accountsTbody button[data-run]').disabled === false", timeout=20000)
+
     page.click("#btnBatchRun")
     page.wait_for_function("() => document.querySelector('#accountsTbody td.status-done') !== null", timeout=30000)
 

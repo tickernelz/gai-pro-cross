@@ -22,18 +22,30 @@ code pages); this version runs from one codebase on Linux, Windows, and macOS.
   - `email----password----2fa`
   - `email----password----recovery----2fa`
   (`----`, `|`, tab, comma and whitespace delimiters are accepted.)
-- A five-step pipeline: sign in -> clear 2FA/recovery -> bind card -> stack the offer
-  layers -> cancel auto-renew and capture a proof screenshot.
+- A five-step pipeline: verify the stored session -> bind card -> stack the offer layers
+  -> cancel auto-renew and capture a proof screenshot.
+- Manual login once: the console button or `python -m gai_pro login --account <id>`
+  opens a visible browser, you sign in yourself, and the session is written to
+  `sessions/<account>/storage_state.json` plus a persistent browser profile. Later runs
+  reuse it and never ask for the password.
 - A `$0.00` guard: the checkout must show a zero total or the step refuses to confirm.
+
+Google rejects credential sign-in from an automated browser: Playwright's bundled
+Chromium and a real Chrome binary (`channel="chrome"`) both land on
+`accounts.google.com/v3/signin/rejected` ("This browser or app may not be secure"),
+while an unmodified browser on the same machine passes the identifier page. That is why
+live mode no longer types a password: the password field in an imported line is accepted
+for the legacy formats only and is never sent to Google.
 
 Two execution modes:
 
 | mode | target | needs |
 |------|--------|-------|
 | `mock` (default) | a local stand-in Google server, no network, no real card | nothing but Python 3.10+ |
-| `live` | the real Google pages | Playwright + Chromium, `--accept-tos-risk` |
+| `live` | the real Google pages | Playwright + Chrome/Chromium, a stored session from *Login manual*, `--accept-tos-risk` |
 
-The mock mode is the only path this repository verifies in CI. The live selector
+Live runs always open a visible browser; headless is not an option there. The mock mode
+is the only path this repository verifies in CI. The live selector
 profile is ported from the original repository and is **not verified here**; run it
 against your own account with a visible browser and a card you own, at your own risk.
 
@@ -52,15 +64,20 @@ The console shows this same guide at the top of the page. Read it before the fir
 3. **Paste accounts** in the right panel, one per line, then press *Import accounts*.
    Accepted forms: `email----password----recovery----2fa`,
    `email----password----2fa`, `email----password`.
-4. **Run.** Press *Execute* on one row, or *Run batch* to queue every account.
-   *Stop all* halts the queue without deleting rows.
-5. **Read the result.** Status moves queued → running → done or error. On a finished
-   row press *proof* for the screenshot, and read the Log panel to see what each step
-   did.
+4. **Log in by hand once.** Press *Login manual* on a row (or run
+   `python -m gai_pro login --account <id>`). A visible browser opens at
+   `accounts.google.com`; finish the sign-in yourself. The Session column turns
+   `valid` and the session is stored on this machine. Repeat only when Google expires it.
+5. **Run and read the result.** Press *Execute* on one row, or *Run batch* to queue every
+   account. *Stop all* halts the queue without deleting rows. Status moves queued →
+   running → done or error; press *proof* for the screenshot and read the Log panel.
 
-The step counter `1/5 … 5/5` means: 1 sign in and clear two-factor or recovery,
+The step counter `1/5 … 5/5` means: 1 verify the stored session (a missing session
+fails at once with "sesi belum ada, jalankan Login manual", not a blind timeout),
 2–4 subscribe one offer layer each (a layer that is already stacked is skipped),
-5 cancel auto-renew and capture the proof screenshot.
+5 cancel auto-renew and capture the proof screenshot. A failed step also writes the page
+screenshot and last URL under `screenshots/<account>/` and names the file in the error
+line.
 
 The console listens on loopback only and there is no telemetry. In `live` mode the
 checkout profile is submitted to Google's own checkout page; nothing else leaves this
@@ -99,18 +116,27 @@ starts `python -m gai_pro serve`. The console then opens in your browser at
 ```sh
 python -m pip install -e ".[live]"
 python -m playwright install chromium
+python -m gai_pro login --account <id-or-email> --mode live --accept-tos-risk
 python -m gai_pro serve --mode live --accept-tos-risk --no-browser
 ```
 
+`login` picks Chrome when it is installed (`channel="chrome"`) and falls back to the
+bundled Chromium otherwise. It refuses to run `--mode live` without
+`--accept-tos-risk`. Without `--mode` it follows the mode stored in the console
+config, so pass `--mode live` before the console has ever been started in live mode.
+
 ## Where data lives
 
-| OS | config, accounts and logs | screenshots |
+| OS | config, accounts, logs, profiles and sessions | screenshots |
 |----|---------------------------|-------------|
 | Linux | `~/.local/share/gai-pro-cross/` | `.../screenshots/<account>/` |
 | macOS | `~/Library/Application Support/gai-pro-cross/` | same sub-layout |
 | Windows | `%LOCALAPPDATA%\gai-pro-cross\` | same sub-layout |
 
-On POSIX the directories are `0700` and the files are `0600`. On Windows the installer
+The live session lives in two places: `profiles/<account>/` is the persistent Chrome
+profile and `sessions/<account>/storage_state.json` is the exported cookie state. Both
+are per account, and deleting the account removes them. On POSIX every directory is
+`0700` and every file is `0600`. On Windows the installer
 does not reverse the ACL, so read the note in `RISKS.md`. The card number, passwords
 and 2FA secrets never leave this directory and are redacted from every log line.
 
@@ -120,6 +146,7 @@ and 2FA secrets never leave this directory and are redacted from every log line.
 
 ```sh
 python -m gai_pro serve       # start the console (mock mode)
+python -m gai_pro login --account <id-or-email>   # sign in by hand and store the session
 python -m gai_pro selftest    # exercise the full pipeline against the sandbox
 python -m gai_pro probe       # print per-OS paths and Python version
 ```
@@ -133,8 +160,10 @@ python -m pytest tests -q
 
 The tests prove the account parser, card and tax-region validation, the TOTP code,
 the secret-redaction layer, the file permission bits, the sandbox pipeline (including
-the reject-a-paid-checkout and declined-card paths) and the console HTTP API without
-leaking secrets. One test also asserts that every outbound host in the source is a
+the reject-a-paid-checkout and declined-card paths), the stored-session contract (a
+missing session fails before any login, the live gateway never reads the password, a
+failed step leaves a diagnostic screenshot) and the console HTTP API without leaking
+secrets. One test also asserts that every outbound host in the source is a
 Google domain or the loopback interface. The browser path is covered by
 `tests/test_browser_sandbox.py`, which requires Playwright.
 

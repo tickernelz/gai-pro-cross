@@ -33,6 +33,7 @@ def _selftest(layout: Layout, card_json: str, keep: bool) -> int:
     server = SandboxServer(offers=store.config["offers"]).start()
     gateway = SandboxGateway(server.base_url, account, layout, store)
     server.state.register(account["email"], account["password"], account["recovery_email"], account["totp_secret"])
+    gateway.login(account)
     result = run_pipeline(account, store.config, gateway, store, threading.Event())
     gateway.close()
     server.stop()
@@ -64,6 +65,55 @@ def probe(layout: Layout) -> int:
     return 0
 
 
+def _find_account(store: Store, needle: str) -> dict | None:
+    for acc in store.accounts:
+        if acc["id"] == needle:
+            return acc
+    target = needle.strip().lower()
+    for acc in store.accounts:
+        if str(acc.get("email", "")).lower() == target:
+            return acc
+    return None
+
+
+def _login(layout: Layout, account_ref: str, mode: str, timeout: float, accept_tos_risk: bool) -> int:
+    from .gateway import BrowserGateway, SandboxGateway
+    from .mockgoogle import SandboxServer
+    from .redact import mask_email
+
+    store = Store(layout)
+    account = _find_account(store, account_ref)
+    if account is None:
+        print(f"account not found: {account_ref} (import it in the console first)", file=sys.stderr)
+        return 2
+    chosen = mode or store.config.get("mode", "mock")
+    if chosen == "live" and not accept_tos_risk:
+        print("manual login opens a real Google sign-in page inside an automated browser profile;", file=sys.stderr)
+        print("re-run with --accept-tos-risk if you have read RISKS.md and accept the outcome.", file=sys.stderr)
+        return 2
+    if chosen == "mock":
+        server = SandboxServer(offers=store.config.get("offers")).start()
+        try:
+            server.state.register(
+                account["email"],
+                account["password"],
+                account.get("recovery_email", ""),
+                account.get("totp_secret", ""),
+            )
+            path = SandboxGateway(server.base_url, account, layout, store).login(account)
+        finally:
+            server.stop()
+    else:
+        gateway = BrowserGateway("google", account, layout, store, headless=False)
+        gateway.start()
+        try:
+            path = gateway.manual_login(account, timeout=timeout)
+        finally:
+            gateway.close()
+    print(json.dumps({"account": mask_email(account["email"]), "mode": chosen, "session": str(path)}, indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gai-pro-cross", description="Cross-platform Google AI Pro trial console")
     sub = parser.add_subparsers(dest="command")
@@ -84,6 +134,13 @@ def main(argv: list[str] | None = None) -> int:
     info = sub.add_parser("probe", help="print per-OS paths and versions")
     info.add_argument("--data-dir")
 
+    login = sub.add_parser("login", help="sign in by hand once and store the session for one account")
+    login.add_argument("--account", required=True, help="account id or email")
+    login.add_argument("--data-dir")
+    login.add_argument("--mode", choices=["mock", "live"], default=None)
+    login.add_argument("--timeout", type=float, default=600.0)
+    login.add_argument("--accept-tos-risk", action="store_true")
+
     args = parser.parse_args(argv)
     command = args.command or "serve"
     layout = Layout(getattr(args, "data_dir", None))
@@ -92,6 +149,8 @@ def main(argv: list[str] | None = None) -> int:
         return probe(layout)
     if command == "selftest":
         return _selftest(layout, args.card_json, args.keep)
+    if command == "login":
+        return _login(layout, args.account, args.mode, args.timeout, args.accept_tos_risk)
 
     mode = args.mode
     if mode == "live":

@@ -4,14 +4,23 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
+from .paths import secure_file
+from .redact import mask_email
+from .session import SESSION_MISSING, has_session, read_session, write_session
 from .totp import totp
 
 
 class GatewayError(RuntimeError):
     pass
+
+
+class SessionMissing(GatewayError):
+    """Raised when the pipeline runs before a login stored a session."""
 
 
 class ZeroCostViolation(GatewayError):
@@ -53,6 +62,11 @@ class SandboxGateway:
         except urllib.error.URLError as exc:
             raise GatewayError(f"sandbox unreachable: {exc.reason}") from exc
 
+    def _session_note(self, message):
+        self._note(message)
+        if self.store is not None:
+            self.store.log(f"{self.account.get('email', '')}: {message}", "session")
+
     def login(self, account):
         totp_code = totp(account["totp_secret"]) if account.get("totp_secret") else ""
         payload = {
@@ -65,7 +79,28 @@ class SandboxGateway:
         self.token = result.get("token", "")
         if not self.token:
             raise GatewayError("sandbox login returned no session token")
-        self._note(f"login ok for {account['email']}")
+        path = write_session(self.layout, account["id"], {"mode": "mock", "email": account["email"]})
+        self._session_note(f"mock session stored at {path}")
+        return path
+
+    def verify_session(self):
+        state = read_session(self.layout, self.account["id"])
+        if not state or state.get("mode") != "mock":
+            return False
+        if str(state.get("email", "")).lower() != str(self.account.get("email", "")).lower():
+            return False
+        try:
+            result = self._request("POST", "/mock/api/session", {"email": state["email"]})
+        except GatewayError:
+            return False
+        self.token = result.get("token", "")
+        if not self.token:
+            return False
+        self._session_note("stored session resumed")
+        return True
+
+    def capture_diagnostic(self, tag):
+        return None
 
     def plan_state(self):
         return self._request("GET", "/mock/api/plans")
@@ -166,13 +201,20 @@ class BrowserGateway:
         self.proxy = proxy
         self._base = ""
         self._playwright = None
-        self._browser = None
         self._context = None
         self._page = None
         self.log = []
 
     def _note(self, message):
         self.log.append(message)
+
+    def _session_note(self, message):
+        self._note(message)
+        if self.store is not None:
+            self.store.log(f"{self.account.get('email', '')}: {message}", "session")
+
+    def _headless(self):
+        return False if self.profile == "google" else bool(self.headless)
 
     def start(self, base_url=""):
         try:
@@ -181,12 +223,34 @@ class BrowserGateway:
             raise GatewayError("playwright missing; run: pip install -e .[live]") from exc
         self._base = (base_url or self.selectors["base_url"]).rstrip("/")
         self._playwright = sync_playwright().start()
-        launch = {"headless": self.headless}
+        profile_dir = self.layout.profile_dir(self.account["id"])
+        options = {
+            "user_data_dir": str(profile_dir),
+            "headless": self._headless(),
+            "locale": "en-US",
+        }
         if self.proxy:
-            launch["proxy"] = {"server": self.proxy}
-        self._browser = self._playwright.chromium.launch(**launch)
-        self._context = self._browser.new_context(locale="en-US")
-        self._page = self._context.new_page()
+            options["proxy"] = {"server": self.proxy}
+        channels = ["chrome", None] if self.profile == "google" else [None]
+        failure = None
+        for channel in channels:
+            attempt = dict(options)
+            if channel:
+                attempt["channel"] = channel
+            try:
+                self._context = self._playwright.chromium.launch_persistent_context(**attempt)
+                self._note(f"browser ready with {channel or 'bundled chromium'} at {profile_dir}")
+                break
+            except Exception as exc:
+                failure = exc
+        if self._context is None:
+            try:
+                self._playwright.stop()
+            except Exception:
+                pass
+            self._playwright = None
+            raise GatewayError(f"browser launch failed: {failure}")
+        self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
 
     def _url(self, path):
         return path if path.startswith("http") else f"{self._base}{path}"
@@ -204,6 +268,8 @@ class BrowserGateway:
         self._page.click(selector)
 
     def login(self, account):
+        if self.profile == "google":
+            return self.manual_login(account)
         page = self._page
         page.goto(self._url(self.selectors["signin_url"]), wait_until="domcontentloaded")
         page.wait_for_timeout(400)
@@ -222,7 +288,90 @@ class BrowserGateway:
         except Exception:
             self._note("submit control absent, challenge already satisfied")
         page.wait_for_timeout(900)
-        self._note(f"login finished at {page.url}")
+        self._session_note(f"mock sign-in finished at {page.url}")
+        return self._persist_session(account)
+
+    def manual_login(self, account, timeout=600.0, interval=3.0):
+        page = self._page
+        page.goto(self._url(self.selectors["signin_url"]), wait_until="domcontentloaded")
+        self._session_note(f"browser opened for {mask_email(account.get('email', ''))}; finish the sign-in by hand")
+        deadline = time.time() + max(30.0, float(timeout))
+        while time.time() < deadline:
+            if self._session_reaches_plans():
+                path = self._persist_session(account)
+                self._session_note(f"session valid, storage_state saved at {path}")
+                return path
+            time.sleep(max(1.0, float(interval)))
+        raise SessionMissing(f"sesi belum valid — manual login timed out after {int(timeout)}s")
+
+    def verify_session(self):
+        if not has_session(self.layout, self.account["id"]):
+            return False
+        self._restore_session()
+        if self._session_reaches_plans():
+            self._session_note("stored session is valid")
+            return True
+        return False
+
+    def _same_origin(self, url):
+        left = urllib.parse.urlparse(url)
+        right = urllib.parse.urlparse(self._url(self.selectors["plans_url"]))
+        return (left.scheme, left.netloc) == (right.scheme, right.netloc)
+
+    def _session_reaches_plans(self):
+        if self._context is None:
+            return False
+        checker = self._context.new_page()
+        try:
+            checker.goto(self._url(self.selectors["plans_url"]), wait_until="domcontentloaded", timeout=45000)
+            checker.wait_for_timeout(500)
+            path = urllib.parse.urlparse(checker.url).path.lower()
+            if "signin" in path or "servicelogin" in path:
+                return False
+            return self._same_origin(checker.url)
+        except Exception:
+            return False
+        finally:
+            try:
+                checker.close()
+            except Exception:
+                pass
+
+    def _persist_session(self, account):
+        state = self._context.storage_state()
+        payload = {
+            "mode": "live" if self.profile == "google" else "sandbox",
+            "email": account.get("email", ""),
+            "cookies": state.get("cookies", []),
+            "origins": state.get("origins", []),
+        }
+        return write_session(self.layout, account["id"], payload)
+
+    def _restore_session(self):
+        state = read_session(self.layout, self.account["id"])
+        if not state:
+            return
+        cookies = state.get("cookies")
+        if not isinstance(cookies, list) or not cookies:
+            return
+        try:
+            self._context.add_cookies(cookies)
+            self._note("stored cookies loaded into the browser profile")
+        except Exception as exc:
+            self._note(f"stored cookies rejected: {exc}")
+
+    def capture_diagnostic(self, tag):
+        if self._page is None:
+            return None
+        out_dir = self.layout.screenshot_dir(self.account["email"])
+        image = out_dir / f"{tag}.png"
+        report = out_dir / f"{tag}.url.txt"
+        url = self._page.url
+        self._page.screenshot(path=str(image), full_page=True)
+        report.write_text(url + "\n", encoding="utf-8")
+        secure_file(image)
+        secure_file(report)
+        return {"screenshot": str(image), "url_file": str(report), "url": url}
 
     def plan_state(self):
         page = self._page
@@ -306,15 +455,17 @@ class BrowserGateway:
         return str(target)
 
     def close(self):
-        for closer in (self._context, self._browser):
-            try:
-                if closer:
-                    closer.close()
-            except Exception:
-                pass
+        try:
+            if self._context:
+                self._context.close()
+        except Exception:
+            pass
+        self._context = None
+        self._page = None
         if self._playwright:
             try:
                 self._playwright.stop()
             except Exception:
                 pass
+        self._playwright = None
 

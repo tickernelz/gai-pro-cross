@@ -65,6 +65,7 @@ def test_batch_run_completes_and_writes_proof(console, layout):
     base = console.url
     post(base, "/api/accounts/import", {"raw_text": "runner@example.com----pw----rec@example.com----JBSWY3DPEHPK3PXP"})
     post(base, "/api/config", {"mode": "mock", "card": {"number": "4242424242424242", "exp_month": "08", "exp_year": "29", "cvc": "123", "holder": "SANDBOX"}})
+    login_first_account(base)
     queued = post(base, "/api/run/batch", {})["queued"]
     assert queued == 1
     deadline = time.time() + 30
@@ -79,12 +80,40 @@ def test_batch_run_completes_and_writes_proof(console, layout):
     assert state["accounts"][0]["is_running"] is False
 
 
+def test_run_without_session_reports_a_clear_error(console):
+    base = console.url
+    post(base, "/api/accounts/import", {"raw_text": "nosession@example.com----pw"})
+    post(base, "/api/config", {"mode": "mock"})
+    state = get(base, "/api/state")
+    assert state["accounts"][0]["has_session"] is False
+    assert post(base, "/api/run/batch", {})["queued"] == 1
+
+    state = wait_for_finished(base)
+    account = state["accounts"][0]
+    assert account["status"] == "error", account
+    assert "sesi belum ada" in account["step_message"]
+
+
 def test_stop_endpoint_acknowledges(console):
     assert post(console.url, "/api/stop", {})["ok"] is True
 
 
 def test_proxy_test_rejects_malformed_value(console):
     assert post(console.url, "/api/proxy/test", {"proxy": "not-a-proxy"})["ok"] is False
+
+
+def login_first_account(base, timeout=20):
+    state = get(base, "/api/state")
+    acc_id = state["accounts"][0]["id"]
+    assert post(base, "/api/accounts/login", {"id": acc_id})["ok"] is True
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        state = get(base, "/api/state")
+        account = state["accounts"][0]
+        if account["has_session"] and not account["is_running"]:
+            return account
+        time.sleep(0.2)
+    raise AssertionError("manual login did not store a session in time")
 
 
 def wait_for_finished(base, timeout=30):
@@ -102,6 +131,7 @@ def test_state_exposes_relative_proof_and_no_absolute_path(console, layout):
     base = console.url
     post(base, "/api/accounts/import", {"raw_text": "proof@example.com----pw----rec@example.com----JBSWY3DPEHPK3PXP"})
     post(base, "/api/config", {"mode": "mock"})
+    login_first_account(base)
     assert post(base, "/api/run/batch", {})["queued"] == 1
 
     state = wait_for_finished(base)

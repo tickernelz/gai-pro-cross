@@ -4,6 +4,7 @@ import stat
 import pytest
 
 from gai_pro.paths import Layout, secure_file
+from gai_pro.session import write_session
 from gai_pro.store import Store
 
 posix_only = pytest.mark.skipif(os.name != "posix", reason="mode bits are a POSIX concept")
@@ -32,6 +33,16 @@ def test_secure_file_tightens_existing_file(tmp_path):
     os.chmod(target, 0o644)
     secure_file(target)
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+@posix_only
+def test_profile_and_session_storage_are_owner_only(layout):
+    profile = layout.profile_dir("acc_test")
+    assert stat.S_IMODE(profile.stat().st_mode) == 0o700
+    target = write_session(layout, "acc_test", {"mode": "live", "cookies": []})
+    assert target.name == "storage_state.json"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert stat.S_IMODE(target.parent.stat().st_mode) == 0o700
 
 
 @posix_only
