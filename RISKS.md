@@ -46,7 +46,10 @@ does not start live mode without the explicit `--accept-tos-risk` flag.
 - A stored session is itself a credential: `profiles/<account>/` and
   `sessions/<account>/storage_state.json` hold cookies that can sign in as the
   account. They are `0700`/`0600` on POSIX, and deleting the row in the console
-  removes them.
+  removes them. A live session only counts while the exported state carries a Google
+  login cookie (`SID`, `SAPISID`, `__Secure-1PSID`, `__Secure-3PSID`, `HSID` or
+  `SSID`); a file without one, such as one left by a browser that closed before you
+  finished signing in, is treated as missing and never reused.
 - Recovery and 2FA are only as strong as the program's ability to read the challenge;
   the original could not unlock a hardware-key-only account.
 
@@ -70,7 +73,9 @@ restrict it yourself.
 
 The verified path is mock mode on the CI matrix (Linux, Windows, macOS): install,
 the sandbox pipeline, the browser layer against the sandbox, the stored-session
-contract (a fake session is created and reused, a missing session fails fast, the
-live gateway never reads the password) and the file-permission checks. The live
+contract (a fake session is created and reused, a live session without a Google login
+cookie counts as missing, an aborted manual login times out instead of saving an
+anonymous session, the live gateway never reads the password) and the file-permission
+checks. The live
 Google path, including the real manual sign-in, is ported from the original selector
 profile and cannot be verified in this repository.
