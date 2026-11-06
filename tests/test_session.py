@@ -1,3 +1,4 @@
+import pathlib
 import sys
 import threading
 import time
@@ -10,6 +11,7 @@ from gai_pro.accounts import new_account_record, parse_line
 from gai_pro.card import TAXFREE_PROFILES
 from gai_pro.cli import main
 from gai_pro.gateway import BrowserGateway, GatewayError, SandboxGateway, SessionMissing
+from gai_pro.livebrowser import proxy_settings
 from gai_pro.mockgoogle import SandboxServer
 from gai_pro.paths import Layout
 from gai_pro.pipeline import run_pipeline
@@ -105,21 +107,18 @@ class FakeClock:
 
 
 class FakeChromium:
-    def __init__(self, context, fail_chrome=False):
+    def __init__(self, context):
         self.context = context
         self.calls = []
-        self.fail_chrome = fail_chrome
 
     def launch_persistent_context(self, **kwargs):
         self.calls.append(kwargs)
-        if self.fail_chrome and kwargs.get("channel") == "chrome":
-            raise RuntimeError("chrome is not installed")
         return self.context
 
 
 class FakePlaywright:
-    def __init__(self, context, fail_chrome=False):
-        self.chromium = FakeChromium(context, fail_chrome)
+    def __init__(self, context):
+        self.chromium = FakeChromium(context)
 
     def stop(self):
         return None
@@ -136,6 +135,36 @@ class FakeStarter:
 def install_fake_playwright(monkeypatch, playwright):
     module = types.SimpleNamespace(sync_playwright=lambda: FakeStarter(playwright))
     monkeypatch.setitem(sys.modules, "playwright.sync_api", module)
+
+
+class FakeCamoufoxRecorder:
+    def __init__(self):
+        self.options = []
+        self.closed = []
+
+
+def install_fake_camoufox(monkeypatch, context, fail=None):
+    recorder = FakeCamoufoxRecorder()
+
+    class FakeCamoufox:
+        def __init__(self, **options):
+            self.options = options
+            recorder.options.append(options)
+
+        def __enter__(self):
+            if fail is not None:
+                raise fail
+            return context
+
+        def __exit__(self, *args):
+            recorder.closed.append(self.options)
+            return False
+
+    module = types.ModuleType("camoufox.sync_api")
+    module.Camoufox = FakeCamoufox
+    monkeypatch.setitem(sys.modules, "camoufox", types.ModuleType("camoufox"))
+    monkeypatch.setitem(sys.modules, "camoufox.sync_api", module)
+    return recorder
 
 
 class StubGateway:
@@ -207,8 +236,7 @@ def test_live_gateway_never_reads_the_password(monkeypatch, layout, store):
     account = PasswordGuard(build_account("live@example.com", "hunter2"))
     write_session(layout, account["id"], {"mode": "live", "email": account["email"], "cookies": [dict(GOOGLE_SID)], "origins": []})
     context = FakeContext()
-    fake = FakePlaywright(context)
-    install_fake_playwright(monkeypatch, fake)
+    recorder = install_fake_camoufox(monkeypatch, context)
 
     gateway = BrowserGateway("google", account, layout, store)
     gateway.start()
@@ -221,10 +249,12 @@ def test_live_gateway_never_reads_the_password(monkeypatch, layout, store):
     assert path.name == "storage_state.json"
     assert read_session(layout, account["id"])["cookies"] == [GOOGLE_SID]
     assert context.pages[0].filled == []
-    launch = fake.chromium.calls[0]
-    assert launch["channel"] == "chrome"
-    assert launch["headless"] is False
-    assert launch["user_data_dir"] == str(layout.profile_dir(account["id"]))
+    options = recorder.options[0]
+    assert options["persistent_context"] is True
+    assert options["headless"] is False
+    assert options["user_data_dir"] == str(layout.profile_dir(account["id"]))
+    assert options["locale"] == "en-US"
+    assert recorder.closed == [options]
 
 
 def test_google_login_cookie_detection_needs_the_right_name_and_domain():
@@ -238,7 +268,7 @@ def test_google_login_cookie_detection_needs_the_right_name_and_domain():
 def test_a_new_context_has_no_google_login_cookie(monkeypatch, layout, store):
     account = build_account("newcontext@example.com")
     context = FakeContext()
-    install_fake_playwright(monkeypatch, FakePlaywright(context))
+    install_fake_camoufox(monkeypatch, context)
 
     gateway = BrowserGateway("google", account, layout, store)
     gateway.start()
@@ -253,7 +283,7 @@ def test_a_new_context_has_no_google_login_cookie(monkeypatch, layout, store):
 def test_manual_login_times_out_instead_of_saving_an_anonymous_session(monkeypatch, layout, store):
     account = build_account("timeout@example.com")
     context = FakeContext()
-    install_fake_playwright(monkeypatch, FakePlaywright(context))
+    install_fake_camoufox(monkeypatch, context)
     clock = FakeClock()
     monkeypatch.setattr(gateway_module, "time", clock)
 
@@ -281,7 +311,7 @@ class DivergentExportContext(FakeContext):
 def test_manual_login_never_persists_a_state_without_the_login_cookie(monkeypatch, layout, store):
     account = build_account("divergent@example.com")
     context = DivergentExportContext()
-    install_fake_playwright(monkeypatch, FakePlaywright(context))
+    install_fake_camoufox(monkeypatch, context)
     monkeypatch.setattr(gateway_module, "time", FakeClock())
 
     gateway = BrowserGateway("google", account, layout, store)
@@ -307,16 +337,90 @@ def test_has_session_ignores_a_live_session_file_without_a_google_cookie(layout)
     assert has_session(layout, account_id, "live") is True
 
 
-def test_live_gateway_falls_back_to_bundled_chromium(monkeypatch, layout, store):
-    account = build_account("fallback@example.com")
-    fake = FakePlaywright(FakeContext(), fail_chrome=True)
-    install_fake_playwright(monkeypatch, fake)
+def test_live_gateway_runs_on_camoufox_and_never_launches_chromium(monkeypatch, layout, store):
+    account = build_account("camoufox-only@example.com")
+    playwright = FakePlaywright(FakeContext())
+    install_fake_playwright(monkeypatch, playwright)
+    recorder = install_fake_camoufox(monkeypatch, FakeContext())
 
     gateway = BrowserGateway("google", account, layout, store)
     gateway.start()
     gateway.close()
 
-    assert [call.get("channel") for call in fake.chromium.calls] == ["chrome", None]
+    assert playwright.chromium.calls == []
+    assert len(recorder.options) == 1
+    assert recorder.options[0]["persistent_context"] is True
+
+
+def test_live_login_names_the_camoufox_install_commands(monkeypatch, layout, store):
+    account = build_account("nocamoufox@example.com")
+    monkeypatch.setitem(sys.modules, "camoufox", None)
+    monkeypatch.setitem(sys.modules, "camoufox.sync_api", None)
+
+    gateway = BrowserGateway("google", account, layout, store)
+    with pytest.raises(GatewayError) as excinfo:
+        gateway.start()
+
+    message = str(excinfo.value)
+    assert "pip install -U camoufox" in message
+    assert "python -m camoufox fetch" in message
+
+
+def test_live_login_names_the_fetch_step_when_the_camoufox_browser_is_missing(monkeypatch, layout, store):
+    account = build_account("nobrowser@example.com")
+    install_fake_camoufox(monkeypatch, FakeContext(), fail=FileNotFoundError("Executable doesn't exist"))
+
+    gateway = BrowserGateway("google", account, layout, store)
+    with pytest.raises(GatewayError) as excinfo:
+        gateway.start()
+
+    message = str(excinfo.value)
+    assert "pip install -U camoufox" in message
+    assert "python -m camoufox fetch" in message
+
+
+def test_login_command_prints_the_camoufox_hint_instead_of_raising(monkeypatch, tmp_path, capsys):
+    data_dir = str(tmp_path / "data")
+    layout = Layout(data_dir)
+    store = Store(layout)
+    account = build_account("cli-nocamoufox@example.com")
+    store.replace_accounts([account])
+    configure(store)
+    monkeypatch.setitem(sys.modules, "camoufox", None)
+    monkeypatch.setitem(sys.modules, "camoufox.sync_api", None)
+
+    code = main(["login", "--account", account["id"], "--data-dir", data_dir, "--mode", "live", "--accept-tos-risk"])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "pip install -U camoufox" in captured.err
+    assert "python -m camoufox fetch" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_proxy_settings_match_the_playwright_shape():
+    assert proxy_settings("") is None
+    assert proxy_settings("http://user:p%40ss@proxy.example:8080") == {
+        "server": "http://proxy.example:8080",
+        "username": "user",
+        "password": "p@ss",
+    }
+
+
+def test_no_chrome_cdp_login_remains_in_code_or_docs():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    targets = sorted((root / "gai_pro").glob("*.py"))
+    targets += [
+        root / "README.md",
+        root / "RISKS.md",
+        root / "gai_pro" / "web" / "index.html",
+        root / "gai_pro" / "web" / "app.js",
+    ]
+    forbidden = ["connect_over" + "_cdp", "--remote-debugging" + "-port", "devtools" + ".json"]
+    for path in targets:
+        text = path.read_text(encoding="utf-8")
+        for token in forbidden:
+            assert token not in text, f"{path.relative_to(root)} still mentions {token}"
 
 
 def test_failed_step_writes_a_diagnostic_and_names_it(store, layout):

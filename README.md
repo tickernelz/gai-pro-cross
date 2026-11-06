@@ -25,7 +25,8 @@ code pages); this version runs from one codebase on Linux, Windows, and macOS.
 - A five-step pipeline: verify the stored session -> bind card -> stack the offer layers
   -> cancel auto-renew and capture a proof screenshot.
 - Manual login once: the console button or `python -m gai_pro login --account <id>`
-  opens a visible browser, you sign in yourself, and the session is written to
+  opens a visible Camoufox window (the anti-detect Firefox build), you sign in yourself,
+  and the session is written to
   `sessions/<account>/storage_state.json` plus a persistent browser profile only after
   Google sets a login cookie (`SID`, `SAPISID`, `__Secure-1PSID`, `__Secure-3PSID`,
   `HSID` or `SSID` on `google.com`). A session file without one of those cookies counts
@@ -33,19 +34,21 @@ code pages); this version runs from one codebase on Linux, Windows, and macOS.
   runs reuse the session and never ask for the password.
 - A `$0.00` guard: the checkout must show a zero total or the step refuses to confirm.
 
-Google rejects credential sign-in from an automated browser: Playwright's bundled
-Chromium and a real Chrome binary (`channel="chrome"`) both land on
-`accounts.google.com/v3/signin/rejected` ("This browser or app may not be secure"),
-while an unmodified browser on the same machine passes the identifier page. That is why
-live mode no longer types a password: the password field in an imported line is accepted
-for the legacy formats only and is never sent to Google.
+Google rejects credential sign-in from an automated Chrome: Playwright's bundled
+Chromium, a real Chrome binary, and a Chrome driven over a DevTools port all land on
+`accounts.google.com/v3/signin/rejected` ("This browser or app may not be secure").
+Chrome is therefore not a live backend at all. Live mode runs on **Camoufox**, a Firefox
+build that spoofs the fingerprint inside the browser instead of injecting script, with a
+persistent profile per account and a visible window. That is also why live mode never
+types a password: the password field in an imported line is accepted for the legacy
+formats only and is never sent to Google.
 
 Two execution modes:
 
 | mode | target | needs |
 |------|--------|-------|
 | `mock` (default) | a local stand-in Google server, no network, no real card | nothing but Python 3.10+ |
-| `live` | the real Google pages | Playwright + Chrome/Chromium, a stored session from *Login manual*, `--accept-tos-risk` |
+| `live` | the real Google pages | Camoufox (installed with `pip install -U camoufox` + `python -m camoufox fetch`), a stored session from *Login manual*, `--accept-tos-risk` |
 
 Live runs always open a visible browser; headless is not an option there. The mock mode
 is the only path this repository verifies in CI. The live selector
@@ -68,8 +71,8 @@ The console shows this same guide at the top of the page. Read it before the fir
    Accepted forms: `email----password----recovery----2fa`,
    `email----password----2fa`, `email----password`.
 4. **Log in by hand once.** Press *Login manual* on a row (or run
-   `python -m gai_pro login --account <id>`). A visible browser opens at
-   `accounts.google.com`; finish the sign-in yourself. The browser stays open until the
+   `python -m gai_pro login --account <id>`). A visible Camoufox window opens at
+   `accounts.google.com`; finish the sign-in yourself. The window stays open until the
    Google login cookie appears, and the Session column turns `valid` only then; a
    profile without that cookie stays `missing`. The session is stored on this machine.
    Repeat only when Google expires it.
@@ -122,16 +125,19 @@ starts `python -m gai_pro serve`. The console then opens in your browser at
 
 ```sh
 python -m pip install -e ".[live]"
-python -m playwright install chromium
+python -m pip install -U camoufox
+python -m camoufox fetch
 python -m gai_pro login --account <id-or-email> --mode live --accept-tos-risk
 python -m gai_pro serve --mode live --accept-tos-risk --no-browser
 ```
 
-`login` picks Chrome when it is installed (`channel="chrome"`) and falls back to the
-bundled Chromium otherwise. It keeps the browser open until Google sets a login cookie,
-prints `session saved (SID present)` when it writes the session, and never stores an
-anonymous browser state; `Ctrl+C` aborts and leaves no session. It refuses to run
-`--mode live` without `--accept-tos-risk`. Without `--mode` it follows the mode stored in the console
+Camoufox is the only live backend; there is no fallback to Chrome or to Playwright's
+bundled browsers. If the package or its browser build is missing, login stops with
+`Camoufox belum terpasang ... pip install -U camoufox lalu python -m camoufox fetch`
+instead of a traceback. `login` keeps the Camoufox window open until Google sets a
+login cookie, prints `session saved (SID present)` when it writes the session, and never
+stores an anonymous browser state; `Ctrl+C` aborts and leaves no session. It refuses to
+run `--mode live` without `--accept-tos-risk`. Without `--mode` it follows the mode stored in the console
 config, so pass `--mode live` before the console has ever been started in live mode.
 
 ## Where data lives
@@ -142,7 +148,7 @@ config, so pass `--mode live` before the console has ever been started in live m
 | macOS | `~/Library/Application Support/gai-pro-cross/` | same sub-layout |
 | Windows | `%LOCALAPPDATA%\gai-pro-cross\` | same sub-layout |
 
-The live session lives in two places: `profiles/<account>/` is the persistent Chrome
+The live session lives in two places: `profiles/<account>/` is the persistent Camoufox
 profile and `sessions/<account>/storage_state.json` is the exported cookie state. Only
 the exported state is checked for the Google login cookie, so a profile alone does not
 make a session valid. Both are per account, and deleting the account removes them. On POSIX every directory is
@@ -173,8 +179,10 @@ the secret-redaction layer, the file permission bits, the sandbox pipeline (incl
 the reject-a-paid-checkout and declined-card paths), the stored-session contract (a
 live session without a Google login cookie counts as missing, an aborted manual login
 times out instead of saving an anonymous session, the live gateway never reads the
-password, a failed step leaves a diagnostic screenshot) and the console HTTP API without leaking
-secrets. One test also asserts that every outbound host in the source is a
+password, a failed step leaves a diagnostic screenshot), the Camoufox-only live backend
+(the live profile never launches Chromium, a missing Camoufox package or browser build
+prints both install commands, and no Chrome DevTools login remains in the code or docs)
+and the console HTTP API without leaking secrets. One test also asserts that every outbound host in the source is a
 Google domain or the loopback interface. The browser path is covered by
 `tests/test_browser_sandbox.py`, which requires Playwright.
 
@@ -186,7 +194,8 @@ screenshot and log from each OS as an artifact.
 
 - Windows-only launchers replaced with per-OS launchers and one `python -m gai_pro`
   entry point; GBK code pages and hardcoded `C:\Program Files\...` paths removed.
-- Runtime dependencies reduced to zero; Playwright is an optional extra.
+- Runtime dependencies reduced to zero; Playwright is an optional extra and Camoufox is
+  the only live browser backend.
 - The third-party rotating-proxy API used by the original is removed; the proxy
   template is now user-supplied only.
 - The offer tokens and the on-page hook that modified `one.google.com` responses are

@@ -77,7 +77,7 @@ def _find_account(store: Store, needle: str) -> dict | None:
 
 
 def _login(layout: Layout, account_ref: str, mode: str, timeout: float, accept_tos_risk: bool) -> int:
-    from .gateway import BrowserGateway, SandboxGateway
+    from .gateway import BrowserGateway, GatewayError, SandboxGateway
     from .mockgoogle import SandboxServer
     from .redact import mask_email
 
@@ -88,7 +88,7 @@ def _login(layout: Layout, account_ref: str, mode: str, timeout: float, accept_t
         return 2
     chosen = mode or store.config.get("mode", "mock")
     if chosen == "live" and not accept_tos_risk:
-        print("manual login opens a real Google sign-in page inside an automated browser profile;", file=sys.stderr)
+        print("manual login opens the real Google sign-in page in Camoufox, the anti-detect browser;", file=sys.stderr)
         print("re-run with --accept-tos-risk if you have read RISKS.md and accept the outcome.", file=sys.stderr)
         return 2
     if chosen == "mock":
@@ -105,9 +105,12 @@ def _login(layout: Layout, account_ref: str, mode: str, timeout: float, accept_t
             server.stop()
     else:
         gateway = BrowserGateway("google", account, layout, store, headless=False)
-        gateway.start()
         try:
+            gateway.start()
             path = gateway.manual_login(account, timeout=timeout)
+        except GatewayError as exc:
+            print(f"login failed: {exc}", file=sys.stderr)
+            return 1
         finally:
             gateway.close()
     print(json.dumps({"account": mask_email(account["email"]), "mode": chosen, "session": str(path)}, indent=2))

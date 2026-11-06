@@ -8,6 +8,7 @@ import time
 import urllib.error
 import urllib.request
 
+from .livebrowser import LiveBrowser, LiveBrowserError
 from .paths import secure_file
 from .redact import mask_email
 from .session import SESSION_MISSING, has_google_auth_cookie, has_session, read_session, write_session
@@ -186,7 +187,7 @@ GOOGLE_SELECTORS = {
 
 
 class BrowserGateway:
-    """Playwright driver running the pipeline against the sandbox or Google profile."""
+    """Runs the pipeline in the sandbox browser or the Camoufox live profile."""
 
     def __init__(self, profile, account, layout, store, headless=True, proxy=""):
         if profile not in ("sandbox", "google"):
@@ -200,6 +201,7 @@ class BrowserGateway:
         self.proxy = proxy
         self._base = ""
         self._playwright = None
+        self._live = None
         self._context = None
         self._page = None
         self.log = []
@@ -212,44 +214,56 @@ class BrowserGateway:
         if self.store is not None:
             self.store.log(f"{self.account.get('email', '')}: {message}", "session")
 
-    def _headless(self):
-        return False if self.profile == "google" else bool(self.headless)
-
     def start(self, base_url=""):
+        self._base = (base_url or self.selectors["base_url"]).rstrip("/")
+        if self.profile == "google":
+            self._open_live_browser()
+            return
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
             raise GatewayError("playwright missing; run: pip install -e .[live]") from exc
-        self._base = (base_url or self.selectors["base_url"]).rstrip("/")
         self._playwright = sync_playwright().start()
+        try:
+            self._open_sandbox_browser()
+        except Exception:
+            self._stop_playwright()
+            raise
+
+    def _open_sandbox_browser(self):
         profile_dir = self.layout.profile_dir(self.account["id"])
         options = {
             "user_data_dir": str(profile_dir),
-            "headless": self._headless(),
+            "headless": bool(self.headless),
             "locale": "en-US",
         }
         if self.proxy:
             options["proxy"] = {"server": self.proxy}
-        channels = ["chrome", None] if self.profile == "google" else [None]
-        failure = None
-        for channel in channels:
-            attempt = dict(options)
-            if channel:
-                attempt["channel"] = channel
-            try:
-                self._context = self._playwright.chromium.launch_persistent_context(**attempt)
-                self._note(f"browser ready with {channel or 'bundled chromium'} at {profile_dir}")
-                break
-            except Exception as exc:
-                failure = exc
-        if self._context is None:
+        try:
+            self._context = self._playwright.chromium.launch_persistent_context(**options)
+        except Exception as exc:
+            raise GatewayError(f"browser launch failed: {exc}") from exc
+        self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
+        self._note(f"browser ready with bundled chromium at {profile_dir}")
+
+    def _open_live_browser(self):
+        profile_dir = self.layout.profile_dir(self.account["id"])
+        self._live = LiveBrowser(profile_dir, proxy=self.proxy)
+        try:
+            self._context = self._live.open()
+        except LiveBrowserError as exc:
+            self._live = None
+            raise GatewayError(str(exc)) from exc
+        self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
+        self._note(f"Camoufox siap (headless=False) untuk profil {profile_dir}")
+
+    def _stop_playwright(self):
+        if self._playwright:
             try:
                 self._playwright.stop()
             except Exception:
                 pass
-            self._playwright = None
-            raise GatewayError(f"browser launch failed: {failure}")
-        self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
+        self._playwright = None
 
     def _url(self, path):
         return path if path.startswith("http") else f"{self._base}{path}"
@@ -457,6 +471,12 @@ class BrowserGateway:
         return str(target)
 
     def close(self):
+        if self._live is not None:
+            try:
+                self._live.close()
+            except Exception:
+                pass
+            self._live = None
         try:
             if self._context:
                 self._context.close()
@@ -464,10 +484,5 @@ class BrowserGateway:
             pass
         self._context = None
         self._page = None
-        if self._playwright:
-            try:
-                self._playwright.stop()
-            except Exception:
-                pass
-        self._playwright = None
+        self._stop_playwright()
 

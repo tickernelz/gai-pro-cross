@@ -69,13 +69,25 @@ but that only applies when the console is the one creating the directory. If you
 point `--data-dir` at a network share or an existing directory with broad access,
 restrict it yourself.
 
+## Live browser (Camoufox)
+
+Live mode runs only on Camoufox, an anti-detect Firefox build with a persistent profile
+per account. Chrome is not used and there is no fallback: Google answers an automated
+Chrome, including one started by Playwright or driven over a DevTools port, with
+`accounts.google.com/v3/signin/rejected`. Camoufox is a third-party download
+(`pip install -U camoufox`, then `python -m camoufox fetch`) and Google may still
+refuse a sign-in; that decision is theirs, not something this repository can promise
+around.
+
 ## Verification scope
 
 The verified path is mock mode on the CI matrix (Linux, Windows, macOS): install,
 the sandbox pipeline, the browser layer against the sandbox, the stored-session
 contract (a fake session is created and reused, a live session without a Google login
 cookie counts as missing, an aborted manual login times out instead of saving an
-anonymous session, the live gateway never reads the password) and the file-permission
-checks. The live
-Google path, including the real manual sign-in, is ported from the original selector
-profile and cannot be verified in this repository.
+anonymous session, the live gateway never reads the password), the Camoufox-only live
+backend (the live profile never launches Chromium, a missing Camoufox package or browser
+build prints both install commands, and no Chrome DevTools login remains in the code or
+docs) and the file-permission checks. The live Google path, including the real manual
+sign-in, is ported from the original selector profile and cannot be verified in this
+repository.
