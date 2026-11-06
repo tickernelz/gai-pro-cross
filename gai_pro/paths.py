@@ -89,6 +89,9 @@ class Layout:
     def session_file(self, account_id: str) -> pathlib.Path:
         return self.session_dir(account_id) / "storage_state.json"
 
+    def devtools_file(self, account_id: str) -> pathlib.Path:
+        return self.session_dir(account_id) / "devtools.json"
+
 
 def secure_file(path: pathlib.Path) -> pathlib.Path:
     if os.name == "posix":

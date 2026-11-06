@@ -5,6 +5,7 @@ import types
 
 import pytest
 
+import gai_pro.chrome as chrome_module
 import gai_pro.gateway as gateway_module
 from gai_pro.accounts import new_account_record, parse_line
 from gai_pro.card import TAXFREE_PROFILES
@@ -104,22 +105,36 @@ class FakeClock:
         return None
 
 
+class FakeBrowser:
+    def __init__(self, context):
+        self.contexts = [context]
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
 class FakeChromium:
-    def __init__(self, context, fail_chrome=False):
+    def __init__(self, context):
         self.context = context
         self.calls = []
-        self.fail_chrome = fail_chrome
+        self.endpoints = []
+        self.browsers = []
 
     def launch_persistent_context(self, **kwargs):
         self.calls.append(kwargs)
-        if self.fail_chrome and kwargs.get("channel") == "chrome":
-            raise RuntimeError("chrome is not installed")
         return self.context
+
+    def connect_over_cdp(self, endpoint):
+        self.endpoints.append(endpoint)
+        browser = FakeBrowser(self.context)
+        self.browsers.append(browser)
+        return browser
 
 
 class FakePlaywright:
-    def __init__(self, context, fail_chrome=False):
-        self.chromium = FakeChromium(context, fail_chrome)
+    def __init__(self, context):
+        self.chromium = FakeChromium(context)
 
     def stop(self):
         return None
@@ -136,6 +151,65 @@ class FakeStarter:
 def install_fake_playwright(monkeypatch, playwright):
     module = types.SimpleNamespace(sync_playwright=lambda: FakeStarter(playwright))
     monkeypatch.setitem(sys.modules, "playwright.sync_api", module)
+
+
+class FakeProcess:
+    def __init__(self):
+        self.returncode = None
+        self.terminated = False
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.terminated = True
+        self.returncode = -15
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+    def kill(self):
+        self.returncode = -9
+
+
+class FakeChromeLauncher:
+    def __init__(self, ready=True, listening=False):
+        self.ready = ready
+        self.listening = listening
+        self.port = 9333
+        self.commands = []
+        self.processes = []
+        self.stopped = []
+
+    def free_port(self):
+        return self.port
+
+    def launch(self, profile_dir, port, proxy=""):
+        self.commands.append(chrome_module.launch_args("/usr/bin/google-chrome", profile_dir, port, proxy))
+        process = FakeProcess()
+        self.processes.append(process)
+        return process
+
+    def wait_for_cdp(self, port, timeout=None):
+        return self.ready
+
+    def cdp_version(self, port, timeout=None):
+        return {"Browser": "Chrome/140"} if self.listening else None
+
+    def stop(self, process, timeout=5.0):
+        self.stopped.append(process)
+        if process is not None and process.poll() is None:
+            process.terminate()
+
+
+def install_fake_chrome(monkeypatch, ready=True, listening=False):
+    launcher = FakeChromeLauncher(ready=ready, listening=listening)
+    monkeypatch.setattr(gateway_module.chrome, "free_port", launcher.free_port)
+    monkeypatch.setattr(gateway_module.chrome, "launch", launcher.launch)
+    monkeypatch.setattr(gateway_module.chrome, "wait_for_cdp", launcher.wait_for_cdp)
+    monkeypatch.setattr(gateway_module.chrome, "cdp_version", launcher.cdp_version)
+    monkeypatch.setattr(gateway_module.chrome, "stop", launcher.stop)
+    return launcher
 
 
 class StubGateway:
@@ -209,6 +283,7 @@ def test_live_gateway_never_reads_the_password(monkeypatch, layout, store):
     context = FakeContext()
     fake = FakePlaywright(context)
     install_fake_playwright(monkeypatch, fake)
+    launcher = install_fake_chrome(monkeypatch)
 
     gateway = BrowserGateway("google", account, layout, store)
     gateway.start()
@@ -221,10 +296,15 @@ def test_live_gateway_never_reads_the_password(monkeypatch, layout, store):
     assert path.name == "storage_state.json"
     assert read_session(layout, account["id"])["cookies"] == [GOOGLE_SID]
     assert context.pages[0].filled == []
-    launch = fake.chromium.calls[0]
-    assert launch["channel"] == "chrome"
-    assert launch["headless"] is False
-    assert launch["user_data_dir"] == str(layout.profile_dir(account["id"]))
+    assert fake.chromium.calls == []
+    assert fake.chromium.endpoints == ["http://127.0.0.1:9333"]
+    command = launcher.commands[0]
+    assert "--enable-automation" not in command
+    assert f"--user-data-dir={layout.profile_dir(account['id'])}" in command
+    assert "--remote-debugging-port=9333" in command
+    assert launcher.stopped and launcher.stopped[0].poll() is not None
+    assert fake.chromium.browsers[0].closed is True
+    assert not layout.devtools_file(account["id"]).exists()
 
 
 def test_google_login_cookie_detection_needs_the_right_name_and_domain():
@@ -239,6 +319,7 @@ def test_a_new_context_has_no_google_login_cookie(monkeypatch, layout, store):
     account = build_account("newcontext@example.com")
     context = FakeContext()
     install_fake_playwright(monkeypatch, FakePlaywright(context))
+    install_fake_chrome(monkeypatch)
 
     gateway = BrowserGateway("google", account, layout, store)
     gateway.start()
@@ -254,6 +335,7 @@ def test_manual_login_times_out_instead_of_saving_an_anonymous_session(monkeypat
     account = build_account("timeout@example.com")
     context = FakeContext()
     install_fake_playwright(monkeypatch, FakePlaywright(context))
+    install_fake_chrome(monkeypatch)
     clock = FakeClock()
     monkeypatch.setattr(gateway_module, "time", clock)
 
@@ -282,6 +364,7 @@ def test_manual_login_never_persists_a_state_without_the_login_cookie(monkeypatc
     account = build_account("divergent@example.com")
     context = DivergentExportContext()
     install_fake_playwright(monkeypatch, FakePlaywright(context))
+    install_fake_chrome(monkeypatch)
     monkeypatch.setattr(gateway_module, "time", FakeClock())
 
     gateway = BrowserGateway("google", account, layout, store)
@@ -307,16 +390,108 @@ def test_has_session_ignores_a_live_session_file_without_a_google_cookie(layout)
     assert has_session(layout, account_id, "live") is True
 
 
-def test_live_gateway_falls_back_to_bundled_chromium(monkeypatch, layout, store):
-    account = build_account("fallback@example.com")
-    fake = FakePlaywright(FakeContext(), fail_chrome=True)
+def test_live_gateway_attaches_to_a_chrome_already_listening_on_its_devtools_port(monkeypatch, layout, store):
+    account = build_account("attach@example.com")
+    layout.devtools_file(account["id"]).write_text('{"port": 9444}', encoding="utf-8")
+    fake = FakePlaywright(FakeContext())
     install_fake_playwright(monkeypatch, fake)
+    launcher = install_fake_chrome(monkeypatch, listening=True)
 
     gateway = BrowserGateway("google", account, layout, store)
     gateway.start()
     gateway.close()
 
-    assert [call.get("channel") for call in fake.chromium.calls] == ["chrome", None]
+    assert launcher.commands == []
+    assert fake.chromium.endpoints == ["http://127.0.0.1:9444"]
+    assert fake.chromium.browsers[0].closed is False
+    assert launcher.stopped == []
+    assert layout.devtools_file(account["id"]).is_file()
+
+
+def test_live_gateway_reports_a_devtools_port_that_never_opens(monkeypatch, layout, store):
+    account = build_account("nodevtools@example.com")
+    fake = FakePlaywright(FakeContext())
+    install_fake_playwright(monkeypatch, fake)
+    launcher = install_fake_chrome(monkeypatch, ready=False)
+
+    gateway = BrowserGateway("google", account, layout, store)
+    with pytest.raises(GatewayError) as excinfo:
+        gateway.start()
+
+    assert "DevTools port tidak terbuka" in str(excinfo.value)
+    assert fake.chromium.calls == []
+    assert fake.chromium.endpoints == []
+    assert launcher.stopped and launcher.stopped[0].poll() is not None
+    assert not layout.devtools_file(account["id"]).exists()
+
+
+def test_live_gateway_names_a_missing_chrome(monkeypatch, layout, store):
+    account = build_account("nochrome@example.com")
+    install_fake_playwright(monkeypatch, FakePlaywright(FakeContext()))
+
+    def missing(profile_dir, port, proxy=""):
+        raise chrome_module.ChromeError("Chrome tidak ditemukan (Chrome not found): install Google Chrome")
+
+    monkeypatch.setattr(gateway_module.chrome, "free_port", lambda: 9333)
+    monkeypatch.setattr(gateway_module.chrome, "launch", missing)
+
+    gateway = BrowserGateway("google", account, layout, store)
+    with pytest.raises(GatewayError) as excinfo:
+        gateway.start()
+
+    assert "Chrome tidak ditemukan" in str(excinfo.value)
+
+
+def test_login_command_names_a_missing_chrome_instead_of_raising(monkeypatch, tmp_path, capsys):
+    data_dir = str(tmp_path / "data")
+    layout = Layout(data_dir)
+    store = Store(layout)
+    account = build_account("cli-nochrome@example.com")
+    store.replace_accounts([account])
+    configure(store)
+    install_fake_playwright(monkeypatch, FakePlaywright(FakeContext()))
+
+    def missing(profile_dir, port, proxy=""):
+        raise chrome_module.ChromeError("Chrome tidak ditemukan (Chrome not found)")
+
+    monkeypatch.setattr(gateway_module.chrome, "free_port", lambda: 9333)
+    monkeypatch.setattr(gateway_module.chrome, "launch", missing)
+
+    code = main(["login", "--account", account["id"], "--data-dir", data_dir, "--mode", "live", "--accept-tos-risk"])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "Chrome tidak ditemukan" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_the_chrome_launcher_never_adds_the_automation_flag(tmp_path):
+    command = chrome_module.launch_args("/usr/bin/google-chrome", tmp_path / "profile", 9333)
+
+    assert command[0] == "/usr/bin/google-chrome"
+    assert "--enable-automation" not in command
+    assert "--user-data-dir=" + str(tmp_path / "profile") in command
+    assert "--remote-debugging-port=9333" in command
+    assert "--no-first-run" in command
+    assert "--no-default-browser-check" in command
+    assert command[-1] == "about:blank"
+
+
+def test_a_missing_chrome_install_is_named(monkeypatch):
+    monkeypatch.setattr(chrome_module, "chrome_candidates", lambda: [])
+
+    with pytest.raises(chrome_module.ChromeError) as excinfo:
+        chrome_module.find_chrome()
+
+    assert "Chrome tidak ditemukan" in str(excinfo.value)
+
+
+def test_wait_for_cdp_gives_up_after_the_timeout(monkeypatch):
+    monkeypatch.setattr(chrome_module, "cdp_version", lambda port, timeout=0.5: None)
+    started = time.time()
+
+    assert chrome_module.wait_for_cdp(9333, timeout=0.1, interval=0.01) is False
+    assert time.time() - started < 5
 
 
 def test_failed_step_writes_a_diagnostic_and_names_it(store, layout):

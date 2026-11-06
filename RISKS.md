@@ -52,6 +52,10 @@ does not start live mode without the explicit `--accept-tos-risk` flag.
   finished signing in, is treated as missing and never reused.
 - Recovery and 2FA are only as strong as the program's ability to read the challenge;
   the original could not unlock a hardware-key-only account.
+- *Login manual* starts Chrome with `--remote-debugging-port`, bound to loopback. While
+  that window is open, any local process that can reach the port can drive the same
+  browser and read the signed-in profile. The console stops the Chrome it started once
+  the login cookie is saved; if you abort with `Ctrl+C`, close that window yourself.
 
 ## Privacy and where the data goes
 
@@ -75,7 +79,10 @@ The verified path is mock mode on the CI matrix (Linux, Windows, macOS): install
 the sandbox pipeline, the browser layer against the sandbox, the stored-session
 contract (a fake session is created and reused, a live session without a Google login
 cookie counts as missing, an aborted manual login times out instead of saving an
-anonymous session, the live gateway never reads the password) and the file-permission
-checks. The live
+anonymous session, the live gateway never reads the password), the direct-Chrome login
+contract (the launcher never passes `--enable-automation`, a live start uses
+`connect_over_cdp` instead of `launch_persistent_context`, an open DevTools port is
+reused, and a missing Chrome or an unopened port fails with a named message) and the
+file-permission checks. The live
 Google path, including the real manual sign-in, is ported from the original selector
 profile and cannot be verified in this repository.

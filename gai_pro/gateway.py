@@ -8,6 +8,7 @@ import time
 import urllib.error
 import urllib.request
 
+from . import chrome
 from .paths import secure_file
 from .redact import mask_email
 from .session import SESSION_MISSING, has_google_auth_cookie, has_session, read_session, write_session
@@ -200,8 +201,11 @@ class BrowserGateway:
         self.proxy = proxy
         self._base = ""
         self._playwright = None
+        self._browser = None
         self._context = None
         self._page = None
+        self._chrome_process = None
+        self._attached = False
         self.log = []
 
     def _note(self, message):
@@ -222,6 +226,16 @@ class BrowserGateway:
             raise GatewayError("playwright missing; run: pip install -e .[live]") from exc
         self._base = (base_url or self.selectors["base_url"]).rstrip("/")
         self._playwright = sync_playwright().start()
+        try:
+            if self.profile == "google":
+                self._open_live_browser()
+            else:
+                self._open_sandbox_browser()
+        except Exception:
+            self._stop_playwright()
+            raise
+
+    def _open_sandbox_browser(self):
         profile_dir = self.layout.profile_dir(self.account["id"])
         options = {
             "user_data_dir": str(profile_dir),
@@ -230,26 +244,81 @@ class BrowserGateway:
         }
         if self.proxy:
             options["proxy"] = {"server": self.proxy}
-        channels = ["chrome", None] if self.profile == "google" else [None]
-        failure = None
-        for channel in channels:
-            attempt = dict(options)
-            if channel:
-                attempt["channel"] = channel
+        try:
+            self._context = self._playwright.chromium.launch_persistent_context(**options)
+        except Exception as exc:
+            raise GatewayError(f"browser launch failed: {exc}") from exc
+        self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
+        self._note(f"browser ready with bundled chromium at {profile_dir}")
+
+    def _devtools_marker(self):
+        return self.layout.devtools_file(self.account["id"])
+
+    def _recorded_port(self):
+        try:
+            payload = json.loads(self._devtools_marker().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        port = payload.get("port") if isinstance(payload, dict) else None
+        return port if isinstance(port, int) and port > 0 else None
+
+    def _remember_port(self, port):
+        marker = self._devtools_marker()
+        marker.write_text(json.dumps({"port": int(port)}), encoding="utf-8")
+        secure_file(marker)
+
+    def _forget_port(self):
+        try:
+            self._devtools_marker().unlink()
+        except OSError:
+            pass
+
+    def _open_live_browser(self):
+        self._attached = False
+        profile_dir = self.layout.profile_dir(self.account["id"])
+        recorded = self._recorded_port()
+        if recorded is not None and chrome.cdp_version(recorded):
+            endpoint = f"http://127.0.0.1:{recorded}"
+            self._attached = True
+            self._note(f"attached to the Chrome already listening on {endpoint}")
+        else:
+            port = chrome.free_port()
             try:
-                self._context = self._playwright.chromium.launch_persistent_context(**attempt)
-                self._note(f"browser ready with {channel or 'bundled chromium'} at {profile_dir}")
-                break
-            except Exception as exc:
-                failure = exc
-        if self._context is None:
+                self._chrome_process = chrome.launch(profile_dir, port, self.proxy)
+            except chrome.ChromeError as exc:
+                raise GatewayError(str(exc)) from exc
+            if not chrome.wait_for_cdp(port):
+                chrome.stop(self._chrome_process)
+                self._chrome_process = None
+                raise GatewayError(
+                    f"DevTools port tidak terbuka di http://127.0.0.1:{port} (DevTools port did not open); "
+                    "tutup Chrome yang memakai profil ini lalu coba lagi"
+                )
+            endpoint = f"http://127.0.0.1:{port}"
+            self._remember_port(port)
+        try:
+            self._browser = self._playwright.chromium.connect_over_cdp(endpoint)
+        except Exception as exc:
+            if not self._attached:
+                chrome.stop(self._chrome_process)
+                self._chrome_process = None
+                self._forget_port()
+            raise GatewayError(f"gagal connect ke Chrome lewat DevTools di {endpoint}: {exc}") from exc
+        contexts = getattr(self._browser, "contexts", None) or []
+        if not contexts:
+            self.close()
+            raise GatewayError("Chrome tidak menyediakan context lewat DevTools (no browser context over CDP)")
+        self._context = contexts[0]
+        self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
+        self._note(f"Chrome langsung tanpa --enable-automation di {endpoint}, profile {profile_dir}")
+
+    def _stop_playwright(self):
+        if self._playwright:
             try:
                 self._playwright.stop()
             except Exception:
                 pass
-            self._playwright = None
-            raise GatewayError(f"browser launch failed: {failure}")
-        self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
+        self._playwright = None
 
     def _url(self, path):
         return path if path.startswith("http") else f"{self._base}{path}"
@@ -306,6 +375,7 @@ class BrowserGateway:
                     continue
                 path = self._persist_session(account)
                 self._announce(f"session saved (SID present) at {path}")
+                self.close()
                 return path
             elapsed = int(time.time() - started)
             remaining = int(deadline - time.time())
@@ -458,16 +528,32 @@ class BrowserGateway:
 
     def close(self):
         try:
-            if self._context:
-                self._context.close()
+            if self._page is not None:
+                self._page.close()
         except Exception:
             pass
-        self._context = None
         self._page = None
-        if self._playwright:
+        if self._attached:
+            self._browser = None
+            self._context = None
+            self._stop_playwright()
+            self._attached = False
+            return
+        if self._browser is not None:
             try:
-                self._playwright.stop()
+                self._browser.close()
             except Exception:
                 pass
-        self._playwright = None
+            self._browser = None
+        if self._context is not None:
+            try:
+                self._context.close()
+            except Exception:
+                pass
+        self._context = None
+        if self._chrome_process is not None:
+            chrome.stop(self._chrome_process)
+            self._chrome_process = None
+            self._forget_port()
+        self._stop_playwright()
 
