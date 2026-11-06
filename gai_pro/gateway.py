@@ -6,12 +6,11 @@ import json
 import re
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 
 from .paths import secure_file
 from .redact import mask_email
-from .session import SESSION_MISSING, has_session, read_session, write_session
+from .session import SESSION_MISSING, has_google_auth_cookie, has_session, read_session, write_session
 from .totp import totp
 
 
@@ -294,48 +293,51 @@ class BrowserGateway:
     def manual_login(self, account, timeout=600.0, interval=3.0):
         page = self._page
         page.goto(self._url(self.selectors["signin_url"]), wait_until="domcontentloaded")
-        self._session_note(f"browser opened for {mask_email(account.get('email', ''))}; finish the sign-in by hand")
-        deadline = time.time() + max(30.0, float(timeout))
+        hello = "browser stays open until you finish signing in; Ctrl+C to abort"
+        self._announce(f"{hello} ({mask_email(account.get('email', ''))})")
+        started = time.time()
+        deadline = started + max(30.0, float(timeout))
+        pause = max(1.0, float(interval))
         while time.time() < deadline:
-            if self._session_reaches_plans():
+            if self.context_authenticated():
+                if not has_google_auth_cookie(self._context.storage_state().get("cookies")):
+                    self._session_note("exported storage_state has no Google login cookie yet; still waiting")
+                    time.sleep(pause)
+                    continue
                 path = self._persist_session(account)
-                self._session_note(f"session valid, storage_state saved at {path}")
+                self._announce(f"session saved (SID present) at {path}")
                 return path
-            time.sleep(max(1.0, float(interval)))
+            elapsed = int(time.time() - started)
+            remaining = int(deadline - time.time())
+            self._announce(f"menunggu login selesai... {elapsed}s elapsed, {remaining}s left")
+            time.sleep(pause)
         raise SessionMissing(f"sesi belum valid — manual login timed out after {int(timeout)}s")
 
-    def verify_session(self):
-        if not has_session(self.layout, self.account["id"]):
-            return False
-        self._restore_session()
-        if self._session_reaches_plans():
-            self._session_note("stored session is valid")
-            return True
-        return False
-
-    def _same_origin(self, url):
-        left = urllib.parse.urlparse(url)
-        right = urllib.parse.urlparse(self._url(self.selectors["plans_url"]))
-        return (left.scheme, left.netloc) == (right.scheme, right.netloc)
-
-    def _session_reaches_plans(self):
+    def context_authenticated(self):
         if self._context is None:
             return False
-        checker = self._context.new_page()
         try:
-            checker.goto(self._url(self.selectors["plans_url"]), wait_until="domcontentloaded", timeout=45000)
-            checker.wait_for_timeout(500)
-            path = urllib.parse.urlparse(checker.url).path.lower()
-            if "signin" in path or "servicelogin" in path:
-                return False
-            return self._same_origin(checker.url)
+            return has_google_auth_cookie(self._context.cookies())
         except Exception:
             return False
-        finally:
-            try:
-                checker.close()
-            except Exception:
-                pass
+
+    def _announce(self, message):
+        self._session_note(message)
+        print(message, flush=True)
+
+    def verify_session(self):
+        mode = "live" if self.profile == "google" else "sandbox"
+        if not has_session(self.layout, self.account["id"], mode):
+            return False
+        self._restore_session()
+        if self.profile == "google":
+            if not self.context_authenticated():
+                self._session_note("stored session has no Google login cookie")
+                return False
+            self._session_note("stored session is valid (Google login cookie present)")
+            return True
+        self._session_note("stored session is valid")
+        return True
 
     def _persist_session(self, account):
         state = self._context.storage_state()

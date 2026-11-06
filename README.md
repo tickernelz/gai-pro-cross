@@ -26,8 +26,11 @@ code pages); this version runs from one codebase on Linux, Windows, and macOS.
   -> cancel auto-renew and capture a proof screenshot.
 - Manual login once: the console button or `python -m gai_pro login --account <id>`
   opens a visible browser, you sign in yourself, and the session is written to
-  `sessions/<account>/storage_state.json` plus a persistent browser profile. Later runs
-  reuse it and never ask for the password.
+  `sessions/<account>/storage_state.json` plus a persistent browser profile only after
+  Google sets a login cookie (`SID`, `SAPISID`, `__Secure-1PSID`, `__Secure-3PSID`,
+  `HSID` or `SSID` on `google.com`). A session file without one of those cookies counts
+  as missing, so an anonymous browser that closed early never looks signed in. Later
+  runs reuse the session and never ask for the password.
 - A `$0.00` guard: the checkout must show a zero total or the step refuses to confirm.
 
 Google rejects credential sign-in from an automated browser: Playwright's bundled
@@ -66,14 +69,18 @@ The console shows this same guide at the top of the page. Read it before the fir
    `email----password----2fa`, `email----password`.
 4. **Log in by hand once.** Press *Login manual* on a row (or run
    `python -m gai_pro login --account <id>`). A visible browser opens at
-   `accounts.google.com`; finish the sign-in yourself. The Session column turns
-   `valid` and the session is stored on this machine. Repeat only when Google expires it.
+   `accounts.google.com`; finish the sign-in yourself. The browser stays open until the
+   Google login cookie appears, and the Session column turns `valid` only then; a
+   profile without that cookie stays `missing`. The session is stored on this machine.
+   Repeat only when Google expires it.
 5. **Run and read the result.** Press *Execute* on one row, or *Run batch* to queue every
    account. *Stop all* halts the queue without deleting rows. Status moves queued →
    running → done or error; press *proof* for the screenshot and read the Log panel.
 
-The step counter `1/5 … 5/5` means: 1 verify the stored session (a missing session
-fails at once with "sesi belum ada, jalankan Login manual", not a blind timeout),
+The step counter `1/5 … 5/5` means: 1 verify the stored session (a session file
+without a Google login cookie counts as missing, so an anonymous file left by an
+aborted login fails at once with "sesi belum ada, jalankan Login manual", not a blind
+timeout),
 2–4 subscribe one offer layer each (a layer that is already stacked is skipped),
 5 cancel auto-renew and capture the proof screenshot. A failed step also writes the page
 screenshot and last URL under `screenshots/<account>/` and names the file in the error
@@ -121,8 +128,10 @@ python -m gai_pro serve --mode live --accept-tos-risk --no-browser
 ```
 
 `login` picks Chrome when it is installed (`channel="chrome"`) and falls back to the
-bundled Chromium otherwise. It refuses to run `--mode live` without
-`--accept-tos-risk`. Without `--mode` it follows the mode stored in the console
+bundled Chromium otherwise. It keeps the browser open until Google sets a login cookie,
+prints `session saved (SID present)` when it writes the session, and never stores an
+anonymous browser state; `Ctrl+C` aborts and leaves no session. It refuses to run
+`--mode live` without `--accept-tos-risk`. Without `--mode` it follows the mode stored in the console
 config, so pass `--mode live` before the console has ever been started in live mode.
 
 ## Where data lives
@@ -134,8 +143,9 @@ config, so pass `--mode live` before the console has ever been started in live m
 | Windows | `%LOCALAPPDATA%\gai-pro-cross\` | same sub-layout |
 
 The live session lives in two places: `profiles/<account>/` is the persistent Chrome
-profile and `sessions/<account>/storage_state.json` is the exported cookie state. Both
-are per account, and deleting the account removes them. On POSIX every directory is
+profile and `sessions/<account>/storage_state.json` is the exported cookie state. Only
+the exported state is checked for the Google login cookie, so a profile alone does not
+make a session valid. Both are per account, and deleting the account removes them. On POSIX every directory is
 `0700` and every file is `0600`. On Windows the installer
 does not reverse the ACL, so read the note in `RISKS.md`. The card number, passwords
 and 2FA secrets never leave this directory and are redacted from every log line.
@@ -161,8 +171,9 @@ python -m pytest tests -q
 The tests prove the account parser, card and tax-region validation, the TOTP code,
 the secret-redaction layer, the file permission bits, the sandbox pipeline (including
 the reject-a-paid-checkout and declined-card paths), the stored-session contract (a
-missing session fails before any login, the live gateway never reads the password, a
-failed step leaves a diagnostic screenshot) and the console HTTP API without leaking
+live session without a Google login cookie counts as missing, an aborted manual login
+times out instead of saving an anonymous session, the live gateway never reads the
+password, a failed step leaves a diagnostic screenshot) and the console HTTP API without leaking
 secrets. One test also asserts that every outbound host in the source is a
 Google domain or the loopback interface. The browser path is covered by
 `tests/test_browser_sandbox.py`, which requires Playwright.

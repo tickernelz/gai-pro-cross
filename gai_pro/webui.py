@@ -77,7 +77,7 @@ class Console:
             headless=bool(self.store.config.get("headless", True)),
             proxy=account.get("proxy", ""),
         )
-        if has_session(self.layout, account["id"]):
+        if has_session(self.layout, account["id"], mode):
             gateway.start()
         return gateway
 
