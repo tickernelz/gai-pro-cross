@@ -3,17 +3,21 @@ import threading
 import time
 import types
 
+import pytest
+
+import gai_pro.gateway as gateway_module
 from gai_pro.accounts import new_account_record, parse_line
 from gai_pro.card import TAXFREE_PROFILES
 from gai_pro.cli import main
-from gai_pro.gateway import BrowserGateway, GatewayError, SandboxGateway
+from gai_pro.gateway import BrowserGateway, GatewayError, SandboxGateway, SessionMissing
 from gai_pro.mockgoogle import SandboxServer
 from gai_pro.paths import Layout
 from gai_pro.pipeline import run_pipeline
-from gai_pro.session import read_session, write_session
+from gai_pro.session import has_google_auth_cookie, has_session, read_session, write_session
 from gai_pro.store import Store
 
 SANDBOX_CARD = {"number": "4242424242424242", "exp_month": "08", "exp_year": "29", "cvc": "123", "holder": "SANDBOX"}
+GOOGLE_SID = {"name": "SID", "value": "fake-sid", "domain": ".google.com", "path": "/", "httpOnly": True, "secure": True}
 
 
 def build_account(email="session@example.com", password="pw"):
@@ -67,20 +71,36 @@ class FakePage:
 
 
 class FakeContext:
-    def __init__(self):
+    def __init__(self, cookies=None):
         self.pages = [FakePage()]
-        self.cookies = []
+        self._cookies = list(cookies or [])
 
     def new_page(self):
         return FakePage(self.pages[0].url)
 
     def add_cookies(self, cookies):
-        self.cookies.extend(cookies)
+        self._cookies.extend(cookies)
+
+    def cookies(self):
+        return list(self._cookies)
 
     def storage_state(self):
-        return {"cookies": [], "origins": []}
+        return {"cookies": list(self._cookies), "origins": []}
 
     def close(self):
+        return None
+
+
+class FakeClock:
+    def __init__(self, step=30.0):
+        self.now = 0.0
+        self.step = step
+
+    def time(self):
+        self.now += self.step
+        return self.now
+
+    def sleep(self, seconds):
         return None
 
 
@@ -149,6 +169,7 @@ def test_login_command_stores_a_session_the_pipeline_reuses_without_a_password(t
     state = read_session(layout, account["id"])
     assert state["mode"] == "mock"
     assert state["email"] == "cli@example.com"
+    assert has_session(layout, account["id"], "mock") is True
 
     runtime = store.get_account(account["id"])
     runtime["password"] = ""
@@ -184,7 +205,7 @@ def test_pipeline_without_a_session_fails_fast_with_a_clear_message(store, layou
 
 def test_live_gateway_never_reads_the_password(monkeypatch, layout, store):
     account = PasswordGuard(build_account("live@example.com", "hunter2"))
-    write_session(layout, account["id"], {"mode": "live", "email": account["email"], "cookies": [], "origins": []})
+    write_session(layout, account["id"], {"mode": "live", "email": account["email"], "cookies": [dict(GOOGLE_SID)], "origins": []})
     context = FakeContext()
     fake = FakePlaywright(context)
     install_fake_playwright(monkeypatch, fake)
@@ -198,11 +219,92 @@ def test_live_gateway_never_reads_the_password(monkeypatch, layout, store):
         gateway.close()
 
     assert path.name == "storage_state.json"
+    assert read_session(layout, account["id"])["cookies"] == [GOOGLE_SID]
     assert context.pages[0].filled == []
     launch = fake.chromium.calls[0]
     assert launch["channel"] == "chrome"
     assert launch["headless"] is False
     assert launch["user_data_dir"] == str(layout.profile_dir(account["id"]))
+
+
+def test_google_login_cookie_detection_needs_the_right_name_and_domain():
+    assert has_google_auth_cookie([]) is False
+    assert has_google_auth_cookie([{"name": "NID", "domain": ".google.com"}]) is False
+    assert has_google_auth_cookie([{"name": "SID", "domain": ".example.com"}]) is False
+    assert has_google_auth_cookie([{"name": "SID", "domain": ".google.com"}]) is True
+    assert has_google_auth_cookie([{"name": "__Secure-3PSID", "domain": "google.com"}]) is True
+
+
+def test_a_new_context_has_no_google_login_cookie(monkeypatch, layout, store):
+    account = build_account("newcontext@example.com")
+    context = FakeContext()
+    install_fake_playwright(monkeypatch, FakePlaywright(context))
+
+    gateway = BrowserGateway("google", account, layout, store)
+    gateway.start()
+    try:
+        assert gateway.context_authenticated() is False
+        context.add_cookies([dict(GOOGLE_SID)])
+        assert gateway.context_authenticated() is True
+    finally:
+        gateway.close()
+
+
+def test_manual_login_times_out_instead_of_saving_an_anonymous_session(monkeypatch, layout, store):
+    account = build_account("timeout@example.com")
+    context = FakeContext()
+    install_fake_playwright(monkeypatch, FakePlaywright(context))
+    clock = FakeClock()
+    monkeypatch.setattr(gateway_module, "time", clock)
+
+    gateway = BrowserGateway("google", account, layout, store)
+    gateway.start()
+    try:
+        with pytest.raises(SessionMissing):
+            gateway.manual_login(account, timeout=120, interval=1)
+    finally:
+        gateway.close()
+
+    assert read_session(layout, account["id"]) is None
+    assert any("browser stays open until you finish signing in" in line for line in gateway.log)
+    assert any("menunggu login selesai" in line for line in gateway.log)
+
+
+class DivergentExportContext(FakeContext):
+    def cookies(self):
+        return [dict(GOOGLE_SID)]
+
+    def storage_state(self):
+        return {"cookies": [], "origins": []}
+
+
+def test_manual_login_never_persists_a_state_without_the_login_cookie(monkeypatch, layout, store):
+    account = build_account("divergent@example.com")
+    context = DivergentExportContext()
+    install_fake_playwright(monkeypatch, FakePlaywright(context))
+    monkeypatch.setattr(gateway_module, "time", FakeClock())
+
+    gateway = BrowserGateway("google", account, layout, store)
+    gateway.start()
+    try:
+        with pytest.raises(SessionMissing):
+            gateway.manual_login(account, timeout=120, interval=1)
+    finally:
+        gateway.close()
+
+    assert read_session(layout, account["id"]) is None
+    assert any("exported storage_state has no Google login cookie" in line for line in gateway.log)
+
+
+def test_has_session_ignores_a_live_session_file_without_a_google_cookie(layout):
+    account_id = "acc_anonymous"
+    write_session(layout, account_id, {"mode": "live", "email": "anon@example.com", "cookies": [{"name": "NID", "domain": ".google.com"}], "origins": []})
+    assert has_session(layout, account_id) is False
+    assert has_session(layout, account_id, "live") is False
+
+    write_session(layout, account_id, {"mode": "live", "email": "anon@example.com", "cookies": [dict(GOOGLE_SID)], "origins": []})
+    assert has_session(layout, account_id) is True
+    assert has_session(layout, account_id, "live") is True
 
 
 def test_live_gateway_falls_back_to_bundled_chromium(monkeypatch, layout, store):

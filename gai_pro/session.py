@@ -11,6 +11,28 @@ from .paths import Layout, secure_file
 
 SESSION_MISSING = "sesi belum ada, jalankan Login manual (no session yet, run Login manual)"
 
+GOOGLE_AUTH_COOKIE_NAMES = frozenset({"SID", "SAPISID", "__Secure-1PSID", "__Secure-3PSID", "HSID", "SSID"})
+
+
+def has_google_auth_cookie(cookies) -> bool:
+    for cookie in cookies or []:
+        if not isinstance(cookie, dict):
+            continue
+        if cookie.get("name") not in GOOGLE_AUTH_COOKIE_NAMES:
+            continue
+        domain = str(cookie.get("domain") or "").lstrip(".").lower()
+        if domain == "google.com" or domain.endswith(".google.com"):
+            return True
+    return False
+
+
+def session_authenticated(state: dict | None) -> bool:
+    if not isinstance(state, dict):
+        return False
+    if state.get("mode", "live") != "live":
+        return True
+    return has_google_auth_cookie(state.get("cookies"))
+
 
 def session_path(layout: Layout, account_id: str) -> Path:
     return layout.session_file(account_id)
@@ -31,9 +53,9 @@ def has_session(layout: Layout, account_id: str, mode: str | None = None) -> boo
     state = read_session(layout, account_id)
     if state is None:
         return False
-    if mode is None:
-        return True
-    return state.get("mode", "live") == mode
+    if mode is not None and state.get("mode", "live") != mode:
+        return False
+    return session_authenticated(state)
 
 
 def write_session(layout: Layout, account_id: str, state: dict) -> Path:
