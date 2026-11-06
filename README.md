@@ -51,9 +51,15 @@ Two execution modes:
 | `live` | the real Google pages | Camoufox (installed with `pip install -U camoufox` + `python -m camoufox fetch`), a stored session from *Login manual*, `--accept-tos-risk` |
 
 Live runs always open a visible browser; headless is not an option there. The mock mode
-is the only path this repository verifies in CI. The live selector
-profile is ported from the original repository and is **not verified here**; run it
-against your own account with a visible browser and a card you own, at your own risk.
+is the only path this repository verifies in CI. The live plans page is matched by
+structure, not by English text: the console finds the "Google AI Pro" plan card and
+clicks its call to action (the label follows the account language, for example
+`Dapatkan diskon`), and it refuses to guess when that card is missing. The checkout that
+follows is Google Play billing inside `tokenized.play.google.com/eacquire`; the console
+reads the visible total from that frame and still refuses to confirm anything that is not
+zero, so a paid offer stops with `checkout shows ... refusing to confirm` instead of
+charging the card. Run it against your own account with a visible browser and a card you
+own, at your own risk.
 
 ## How to use — 5 steps
 

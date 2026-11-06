@@ -20,7 +20,7 @@ gai-pro-cross = "gai_pro.cli:main"
 packages = ["gai_pro"]
 
 [tool.setuptools.package-data]
-gai_pro = ["web/*"]
+gai_pro = ["web/*", "*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -409,7 +409,7 @@ def test_proxy_settings_match_the_playwright_shape():
 
 def test_no_chrome_cdp_login_remains_in_code_or_docs():
     root = pathlib.Path(__file__).resolve().parent.parent
-    targets = sorted((root / "gai_pro").glob("*.py"))
+    targets = sorted((root / "gai_pro").glob("*.py")) + sorted((root / "gai_pro").glob("*.js"))
     targets += [
         root / "README.md",
         root / "RISKS.md",

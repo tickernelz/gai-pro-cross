@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import pathlib
 import re
 import time
 import urllib.error
@@ -155,6 +156,9 @@ SANDBOX_SELECTORS = {
     "expiry": "#expiry-value",
 }
 
+LIVE_OFFER_JS = (pathlib.Path(__file__).with_name("live_offer.js")).read_text(encoding="utf-8")
+
+
 GOOGLE_SELECTORS = {
     "base_url": "https://accounts.google.com",
     "signin_url": "https://accounts.google.com/ServiceLogin?hl=en&continue=https%3A%2F%2Fone.google.com%2Fplans",
@@ -167,8 +171,7 @@ GOOGLE_SELECTORS = {
     "totp": 'input#totpPin, input[name="totpPin"], input[type="tel"]',
     "recovery": 'input#knowledge-preregistered-email-response, input[name="knowledgePreregisteredEmailResponse"]',
     "submit": 'button:has-text("Next"), button:has-text("Verify")',
-    "offer_button": 'button:has-text("Try"), button:has-text("Subscribe"), button:has-text("Get started")',
-    "checkout": 'iframe[src*="payments"], [role="dialog"]',
+    "checkout": 'iframe[src*="tokenized.play.google.com/eacquire"], iframe[src*="eacquire"], iframe[src*="payments"], [role="dialog"]',
     "total": "body",
     "card_number": 'input[autocomplete="cc-number"], input[name="cardNumber"]',
     "card_exp": 'input[autocomplete="cc-exp"], input[name="cardExpiry"]',
@@ -417,35 +420,90 @@ class BrowserGateway:
         self._click("cancel_renewal")
         self._page.wait_for_timeout(400)
 
+    def _amounts(self, text):
+        values = []
+        for raw in re.findall(r"(?:Rp|\$)\s?([\d.,]+)", text):
+            try:
+                values.append(float(raw.replace(".", "").replace(",", ".")))
+            except ValueError:
+                continue
+        return values
+
+    def _visible_labels(self):
+        labels = []
+        try:
+            buttons = self._page.locator("button, a[role=button], a")
+            for index in range(min(buttons.count(), 40)):
+                element = buttons.nth(index)
+                text = (element.inner_text() or "").strip() or (element.get_attribute("aria-label") or "").strip()
+                if text:
+                    labels.append(text[:40])
+        except Exception:
+            return labels
+        return labels[:12]
+
+    def _offer_button(self):
+        buttons = self._page.locator("button[data-sku-id]")
+        for index in range(buttons.count()):
+            button = buttons.nth(index)
+            if "ai" in (button.get_attribute("data-sku-id") or "").lower().split("."):
+                return button
+        return self._page.evaluate_handle(LIVE_OFFER_JS).as_element()
+
     def _click_offer(self, offer_id):
-        template = self.selectors["offer_button"]
-        selector = template.format(offer=offer_id) if "{offer}" in template else template
+        if self.profile == "google":
+            button = self._offer_button()
+            if button is None:
+                raise GatewayError(
+                    f"tombol Google AI Pro tidak ditemukan di {self._page.url}; kandidat: {self._visible_labels()}"
+                )
+            button.click()
+            return
+        selector = self.selectors["offer_button"].format(offer=offer_id)
         self._page.wait_for_selector(selector, timeout=20000)
         self._page.click(selector)
 
     def _checkout_scope(self):
         selector = self.selectors["checkout"]
+        handle = None
         try:
-            self._page.wait_for_selector(selector, timeout=15000)
-            return self._page
+            handle = self._page.wait_for_selector(selector, timeout=20000)
         except Exception:
-            for frame in self._page.frames:
-                try:
-                    if frame.query_selector(selector):
-                        return frame
-                except Exception:
-                    continue
-        raise GatewayError("checkout surface did not appear")
+            handle = None
+        if handle is not None:
+            try:
+                frame = handle.content_frame()
+            except Exception:
+                frame = None
+            return frame or self._page
+        for frame in self._page.frames:
+            try:
+                if frame.query_selector(selector):
+                    return frame
+            except Exception:
+                continue
+        raise GatewayError(
+            f"checkout surface did not appear at {self._page.url}; kandidat: {self._visible_labels()}"
+        )
 
     def subscribe(self, offer_id, card, address):
         self._click_offer(offer_id)
         scope = self._checkout_scope()
-        total_text = (scope.text_content(self.selectors["total"]) or "").strip()
-        amounts = re.findall(r"\$?\s?(\d+(?:\.\d{2})?)", total_text)
-        if any(float(a) > 0 for a in amounts if a):
-            raise ZeroCostViolation(f"checkout shows {total_text[:120]!r}, refusing to confirm")
-        if "0.00" not in total_text and not re.search(r"free|trial", total_text, re.I):
-            raise ZeroCostViolation(f"checkout total unclear ({total_text[:120]!r}), refusing to confirm")
+        target = self.selectors["total"]
+        total_text = ""
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            try:
+                total_text = (scope.locator(target).inner_text() or "").strip()
+            except Exception:
+                total_text = (scope.text_content(target) or "").strip()
+            if self._amounts(total_text) or re.search(r"\b0[.,]00\b|gratis|free trial|\bfree\b", total_text, re.I):
+                break
+            time.sleep(1.0)
+        if any(value > 0 for value in self._amounts(total_text)):
+            raise ZeroCostViolation(f"checkout shows {total_text[:160]!r}, refusing to confirm")
+        if not self._amounts(total_text) and "0.00" not in total_text and not re.search(r"gratis|free|trial", total_text, re.I):
+            raise ZeroCostViolation(f"checkout total unclear ({total_text[:160]!r}), refusing to confirm")
         scope.fill(self.selectors["card_number"], card["number"])
         scope.fill(self.selectors["card_exp"], f"{card['exp_month']}/{str(card['exp_year'])[-2:]}")
         scope.fill(self.selectors["card_cvc"], card["cvc"])

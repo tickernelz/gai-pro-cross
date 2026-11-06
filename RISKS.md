@@ -35,6 +35,10 @@ does not start live mode without the explicit `--accept-tos-risk` flag.
   card you can afford to have charged if the cancel step fails.
 - The `$0.00` guard only confirms what the checkout surfaces on screen. A later
   price change or a missed cancellation is outside the program's control.
+- On a live plans page the offer may be a paid subscription with no free trial (Google
+  Play billing, for example `Rp 85.470/month`). The guard reads that total from the
+  billing frame and stops with `checkout shows ... refusing to confirm`; it never
+  confirms a paid checkout, so nothing is charged.
 
 ## Account and 2FA risks
 
