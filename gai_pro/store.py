@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -11,6 +12,7 @@ from pathlib import Path
 from .card import TAXFREE_PROFILES
 from .paths import Layout, secure_file
 from .redact import mask_email, redact
+from .session import clear_session, has_session
 
 DEFAULT_OFFERS = [
     {"id": "pro_5tb_12m", "months": 12, "label": "Google AI Pro 12 months"},
@@ -121,6 +123,12 @@ class Store:
                 return False
             self._accounts = remaining
             self._atomic_write(self.layout.accounts_file, {"accounts": self._accounts})
+            clear_session(self.layout, acc_id)
+            for path in (self.layout.profile_dir(acc_id), self.layout.session_dir(acc_id)):
+                try:
+                    shutil.rmtree(path)
+                except OSError:
+                    self.log(f"could not remove {path.name}", "store")
             return True
 
     def reset_account(self, acc_id: str) -> dict | None:
@@ -166,6 +174,7 @@ class Store:
         out["email_masked"] = mask_email(acc.get("email", ""))
         out["has_totp"] = bool(acc.get("totp_secret"))
         out["has_recovery"] = bool(acc.get("recovery_email"))
+        out["has_session"] = has_session(self.layout, acc.get("id", ""))
         out["proof_rel"] = self._proof_rel(acc.get("last_screenshot"))
         return out
 

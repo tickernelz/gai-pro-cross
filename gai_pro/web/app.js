@@ -39,20 +39,23 @@ function renderAccounts(state) {
   tbody.innerHTML = "";
   if (!state.accounts.length) {
     const tr = document.createElement("tr");
-    tr.innerHTML = '<td colspan="6" class="empty">No accounts yet. Paste accounts in the box above, press Import accounts, then Execute or Run batch.</td>';
+    tr.innerHTML = '<td colspan="7" class="empty">No accounts yet. Paste accounts in the box above, press Import accounts, press Login manual, then Execute or Run batch.</td>';
     tbody.appendChild(tr);
     return;
   }
   for (const acc of state.accounts) {
     const tr = document.createElement("tr");
     const shot = acc.proof_rel ? `<button data-shot="${acc.id}" class="secondary">proof</button>` : "";
+    const session = acc.has_session ? '<span class="status-done">valid</span>' : '<span class="status-error">missing</span>';
     tr.innerHTML = `<td title="${acc.email_masked}">${acc.email_masked}${acc.proxy ? " (proxy)" : ""}</td>
       <td class="status-${acc.status}">${acc.status}</td>
+      <td>${session}</td>
       <td>${acc.current_step}/5 ${acc.step_message || ""}</td>
       <td>${acc.expiry_date || "-"}</td>
       <td>${acc.has_totp ? acc.totp_now + " (" + acc.totp_rem + "s)" : "no totp"}</td>
       <td>
         <div class="buttons">
+          <button data-login="${acc.id}" class="secondary">Login manual</button>
           <button data-run="${acc.id}" ${acc.is_running ? "disabled" : ""}>Execute</button>
           <button data-reset="${acc.id}" class="secondary">Reset</button>
           <button data-delete="${acc.id}" class="secondary">Delete</button>
@@ -156,6 +159,10 @@ $("btnStop").addEventListener("click", async () => {
 
 $("accountsTbody").addEventListener("click", async (event) => {
   const target = event.target;
+  if (target.dataset.login) {
+    const result = await post("/api/accounts/login", { id: target.dataset.login });
+    flash(result.ok ? "login manual started — finish it in the browser window" : "a run or login is already active for this row", !result.ok);
+  }
   if (target.dataset.run) await post("/api/run/single", { id: target.dataset.run });
   if (target.dataset.reset) await post("/api/accounts/reset", { id: target.dataset.reset });
   if (target.dataset.delete) await post("/api/accounts/delete", { id: target.dataset.delete });

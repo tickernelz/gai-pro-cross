@@ -123,4 +123,5 @@ def new_account_record(item: dict) -> dict:
         "last_screenshot": "",
         "layers_done": 0,
         "last_error": "",
+        "last_diagnostic": "",
     }

@@ -19,10 +19,10 @@
       <li><strong>Pick a mode.</strong> <code>mock</code> drives a fake Google that runs on this machine: nothing real happens and no card is ever charged. <code>live</code> drives the real Google site with your own account and card; it is unverified and it breaks Google's terms, so use it at your own risk.</li>
       <li><strong>Fill the checkout profile</strong> — card and billing address. Only <code>live</code> uses it. It is written to this machine's config file with owner-only permissions and the card number comes back masked.</li>
       <li><strong>Paste accounts</strong> in the right panel, one per line, then press <em>Import accounts</em>. Accepted forms: <code>email----password----recovery----2fa</code>, <code>email----password----2fa</code>, <code>email----password</code>.</li>
-      <li><strong>Run.</strong> Press <em>Execute</em> on one row, or <em>Run batch</em> to queue every account. <em>Stop all</em> halts the queue without deleting rows.</li>
-      <li><strong>Read the result.</strong> Status moves queued → running → done or error. On a finished row press <em>proof</em> for the screenshot, and read the Log panel to see what each step did.</li>
+      <li><strong>Log in by hand once.</strong> Press <em>Login manual</em> on a row, or run <code>python -m gai_pro login --account &lt;id&gt;</code>. A visible browser opens at <code>accounts.google.com</code>; finish the sign-in yourself. The session is saved to this machine (<code>profiles/</code> and <code>sessions/&lt;account&gt;/storage_state.json</code>) and later runs reuse it. Google rejects password sign-in from an automated browser, including a real Chrome binary, so the password from an imported line is kept only for old formats and is never sent in <code>live</code> mode.</li>
+      <li><strong>Run and read the result.</strong> Press <em>Execute</em> on one row, or <em>Run batch</em> to queue every account. <em>Stop all</em> halts the queue without deleting rows. Status moves queued → running → done or error; press <em>proof</em> for the screenshot and read the Log panel.</li>
     </ol>
-    <p class="hint">The step counter <code>1/5 … 5/5</code> means: 1 sign in and clear two-factor or recovery, 2–4 subscribe one offer layer each (a layer that is already stacked is skipped), 5 cancel auto-renew and capture the proof screenshot.</p>
+    <p class="hint">The step counter <code>1/5 … 5/5</code> means: 1 verify the stored session (a missing session fails at once with a clear message), 2–4 subscribe one offer layer each (a layer that is already stacked is skipped), 5 cancel auto-renew and capture the proof screenshot. A failed step also saves the page screenshot and URL under <code>screenshots/</code> and names the file in the error line.</p>
     <p class="hint legend">Status: <span class="status-queued">queued</span> waiting · <span class="status-running">running</span> in progress · <span class="status-done">done</span> finished · <span class="status-error">error</span> needs the Log</p>
     <p class="hint">The console listens on loopback only and there is no telemetry. In <code>live</code> mode the checkout profile is submitted to Google's own checkout page; nothing else leaves this machine.</p>
   </section>
@@ -38,7 +38,8 @@
     <label>Target region <input id="cfgTargetRegion" value="US"></label>
     <label>Target plan <input id="cfgTargetPlan" value="pro_2year_zero"></label>
     <label class="row"><input type="checkbox" id="cfgAutoCancel" checked> Cancel auto-renew at the end</label>
-    <label class="row"><input type="checkbox" id="cfgHeadless" checked> Headless browser in live mode</label>
+    <label class="row"><input type="checkbox" id="cfgHeadless" checked> Headless browser in mock mode</label>
+    <p class="hint"><code>live</code> always opens a visible browser: Google refuses credential sign-in from an automated or headless browser, so live runs only with a session created by <em>Login manual</em>.</p>
     <label>Proxy template <input id="cfgProxyTemplate" placeholder="http://user:pass@host:port"></label>
     <p class="hint">Optional. Leave empty to use this machine's direct connection; press <em>Test proxy</em> to check it before a run.</p>
     <fieldset>
@@ -67,14 +68,14 @@
   <section class="panel" id="accountsPanel">
     <h2>Batch account import</h2>
     <textarea id="importText" rows="6" placeholder="email----password----recovery----2fa&#10;email----password----2fa&#10;email----password"></textarea>
-    <p class="hint">One account per line. Lines that do not match a form above are rejected and reported under the buttons.</p>
+    <p class="hint">One account per line. Lines that do not match a form above are rejected and reported under the buttons. The password is used by the local <code>mock</code> sandbox only; <code>live</code> runs need <em>Login manual</em> instead.</p>
     <div class="buttons">
       <button id="btnImport">Import accounts</button>
       <button id="btnBatchRun">Run batch</button>
       <button id="btnStop" class="secondary">Stop all</button>
     </div>
     <table>
-      <thead><tr><th>Account</th><th>Status</th><th>Step</th><th>Expiry</th><th>2FA</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Account</th><th>Status</th><th>Session</th><th>Step</th><th>Expiry</th><th>2FA</th><th>Actions</th></tr></thead>
       <tbody id="accountsTbody"></tbody>
     </table>
   </section>

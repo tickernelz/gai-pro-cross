@@ -41,7 +41,12 @@ does not start live mode without the explicit `--accept-tos-risk` flag.
 - If you import a Google account with its password, you are storing a working
   credential in a plaintext JSON file (readable only by your user on POSIX). An
   attacker that can read your home directory can read it. Prefer a throwaway
-  account, never a primary one.
+  account, never a primary one. The password is only used by the local sandbox; the
+  live path never sends it to Google and needs a session from *Login manual* instead.
+- A stored session is itself a credential: `profiles/<account>/` and
+  `sessions/<account>/storage_state.json` hold cookies that can sign in as the
+  account. They are `0700`/`0600` on POSIX, and deleting the row in the console
+  removes them.
 - Recovery and 2FA are only as strong as the program's ability to read the challenge;
   the original could not unlock a hardware-key-only account.
 
@@ -64,6 +69,8 @@ restrict it yourself.
 ## Verification scope
 
 The verified path is mock mode on the CI matrix (Linux, Windows, macOS): install,
-the sandbox pipeline, the browser layer against the sandbox, and the file-permission
-checks. The live Google path is ported from the original selector profile and is not
-verified in this repository.
+the sandbox pipeline, the browser layer against the sandbox, the stored-session
+contract (a fake session is created and reused, a missing session fails fast, the
+live gateway never reads the password) and the file-permission checks. The live
+Google path, including the real manual sign-in, is ported from the original selector
+profile and cannot be verified in this repository.

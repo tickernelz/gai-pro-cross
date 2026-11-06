@@ -98,6 +98,15 @@ class SandboxState:
             self.sessions[token] = email.lower()
         return token
 
+    def resume(self, email: str) -> str:
+        email = email.lower()
+        if email not in self.accounts:
+            raise SandboxError("account_not_found", "unknown account")
+        with self.lock:
+            token = f"sess_{email}_resume_{len(self.sessions)}"
+            self.sessions[token] = email
+        return token
+
     def subscribe(self, email: str, offer_id: str, card: dict, address: dict) -> dict:
         record = self.accounts[email.lower()]
         offer = next((o for o in self.offers if o["id"] == offer_id), None)
@@ -310,6 +319,8 @@ class MockHandler(BaseHTTPRequestHandler):
                     body.get("totp_code", ""),
                 )
                 return self._json(200, {"token": token})
+            if parsed.path == "/mock/api/session":
+                return self._json(200, {"token": self.state.resume(body.get("email", ""))})
             if parsed.path == "/mock/api/subscribe":
                 email = self._session_email()
                 return self._json(200, self.state.subscribe(email, body.get("offer_id", ""), body.get("card", {}), body.get("address", {})))

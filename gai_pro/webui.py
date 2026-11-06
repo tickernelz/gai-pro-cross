@@ -15,6 +15,7 @@ from .gateway import BrowserGateway, SandboxGateway
 from .mockgoogle import SandboxServer
 from .paths import Layout
 from .pipeline import Aborted, run_pipeline
+from .session import has_session
 from .store import Store
 from .totp import seconds_remaining, totp
 
@@ -76,7 +77,8 @@ class Console:
             headless=bool(self.store.config.get("headless", True)),
             proxy=account.get("proxy", ""),
         )
-        gateway.start()
+        if has_session(self.layout, account["id"]):
+            gateway.start()
         return gateway
 
     def _run(self, account: dict) -> None:
@@ -98,6 +100,56 @@ class Console:
             with self._lock:
                 self._active.pop(account["id"], None)
 
+    def _login(self, account: dict) -> None:
+        mode = self.store.config.get("mode", "mock")
+        gateway = None
+        try:
+            if mode == "mock":
+                server = self.ensure_sandbox()
+                server.state.register(
+                    account["email"],
+                    account["password"],
+                    account.get("recovery_email", ""),
+                    account.get("totp_secret", ""),
+                )
+                gateway = SandboxGateway(server.base_url, account, self.layout, self.store)
+                gateway.login(account)
+            else:
+                gateway = BrowserGateway(
+                    "google",
+                    account,
+                    self.layout,
+                    self.store,
+                    headless=False,
+                    proxy=account.get("proxy", ""),
+                )
+                gateway.start()
+                gateway.manual_login(account)
+            self.store.update_account(account["id"], {"last_error": ""})
+        except Exception as exc:
+            self.store.log(f"{account['email']}: manual login failed: {exc}", "session")
+            self.store.update_account(account["id"], {"last_error": str(exc)[:400]})
+        finally:
+            if gateway is not None:
+                try:
+                    gateway.close()
+                except Exception:
+                    pass
+            with self._lock:
+                self._active.pop(account["id"], None)
+
+    def start_login(self, acc_id: str) -> bool:
+        account = self.store.get_account(acc_id)
+        if account is None:
+            return False
+        with self._lock:
+            if acc_id in self._active:
+                return False
+            thread = threading.Thread(target=self._login, args=(account,), daemon=True, name=f"login-{acc_id}")
+            self._active[acc_id] = thread
+        thread.start()
+        return True
+
     def start_account(self, acc_id: str) -> bool:
         account = self.store.get_account(acc_id)
         if account is None:
@@ -112,7 +164,8 @@ class Console:
         return True
 
     def start_batch(self, start_step: int = 1) -> int:
-        pending = [a for a in self.store.accounts if a["status"] in ("pending", "error", "stopped")]
+        active = set(self.active_ids)
+        pending = [a for a in self.store.accounts if a["status"] in ("pending", "error", "stopped") and a["id"] not in active]
         if not pending:
             return 0
         with self._lock:
@@ -260,6 +313,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if path == "/api/accounts/reset":
             acc = store.reset_account(body.get("id", ""))
             return self._json(200, {"ok": acc is not None})
+        if path == "/api/accounts/login":
+            started = self.console.start_login(body.get("id", ""))
+            return self._json(200, {"ok": started})
         if path == "/api/run/single":
             started = self.console.start_account(body.get("id", ""))
             return self._json(200, {"ok": started})

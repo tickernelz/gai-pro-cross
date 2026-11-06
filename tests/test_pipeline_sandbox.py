@@ -5,7 +5,7 @@ import pytest
 
 from gai_pro.accounts import new_account_record, parse_line
 from gai_pro.card import TAXFREE_PROFILES
-from gai_pro.gateway import SandboxGateway, ZeroCostViolation
+from gai_pro.gateway import GatewayError, SandboxGateway, ZeroCostViolation
 from gai_pro.mockgoogle import SandboxServer
 from gai_pro.pipeline import Aborted, run_pipeline
 
@@ -36,7 +36,9 @@ def build_config(store):
 
 def gateway_for(store, layout, sandbox, acc):
     sandbox.state.register(acc["email"], acc["password"], acc["recovery_email"], acc["totp_secret"])
-    return SandboxGateway(sandbox.base_url, acc, layout, store)
+    gateway = SandboxGateway(sandbox.base_url, acc, layout, store)
+    gateway.login(acc)
+    return gateway
 
 
 def test_full_pipeline_stacks_three_layers_and_cancels(store, layout, sandbox):
@@ -68,16 +70,16 @@ def test_rerun_skips_completed_layers(store, layout, sandbox):
     assert log.count("skip") >= 3
 
 
-def test_wrong_password_is_reported_and_not_fatal_to_console(store, layout, sandbox):
+def test_wrong_password_is_reported_by_login(store, layout, sandbox):
     acc = account()
     acc["password"] = "wrong"
     store.replace_accounts([acc])
-    cfg = build_config(store)
+    build_config(store)
     sandbox.state.register(acc["email"], "right", acc["recovery_email"], acc["totp_secret"])
     gateway = SandboxGateway(sandbox.base_url, acc, layout, store)
-    result = run_pipeline(acc, store.config, gateway, store, threading.Event())
-    assert result["status"] == "error"
-    assert "bad_password" in result["last_error"]
+    with pytest.raises(GatewayError) as failure:
+        gateway.login(acc)
+    assert "bad_password" in str(failure.value)
 
 
 def test_zero_cost_guard_blocks_a_paid_checkout(store, layout, sandbox):

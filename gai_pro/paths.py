@@ -57,6 +57,13 @@ def private_dir(path: pathlib.Path) -> pathlib.Path:
     return path
 
 
+def _safe_name(value: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in value)
+    if safe in ("", ".", ".."):
+        return "unknown"
+    return safe
+
+
 class Layout:
     """Resolved directory layout for one console instance."""
 
@@ -67,10 +74,20 @@ class Layout:
         self.accounts_file = self.root / "accounts.json"
         self.log_file = self.root / "console.log"
         self.screenshots = private_dir(self.root / "screenshots")
+        self.profiles = private_dir(self.root / "profiles")
+        self.sessions = private_dir(self.root / "sessions")
 
     def screenshot_dir(self, tag: str) -> pathlib.Path:
-        safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in tag)
-        return private_dir(self.screenshots / safe)
+        return private_dir(self.screenshots / _safe_name(tag))
+
+    def profile_dir(self, account_id: str) -> pathlib.Path:
+        return private_dir(self.profiles / _safe_name(account_id))
+
+    def session_dir(self, account_id: str) -> pathlib.Path:
+        return private_dir(self.sessions / _safe_name(account_id))
+
+    def session_file(self, account_id: str) -> pathlib.Path:
+        return self.session_dir(account_id) / "storage_state.json"
 
 
 def secure_file(path: pathlib.Path) -> pathlib.Path:
